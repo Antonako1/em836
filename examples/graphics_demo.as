@@ -2,8 +2,10 @@
 ; em836 VGA 640x480 Graphics Demo
 ; Demonstrates custom INT 0x88 unified system call interface
 ; =============================================================
-
-start:
+.use32
+.org 0
+.code
+main:
     ; 1. Set display to 640x480 16-color Graphics Framebuffer (Mode 1)
     mov eax, 0x40           ; SYS_GFX_SET_MODE
     mov ebx, 1              ; 1 = Graphics 640x480
@@ -61,5 +63,6 @@ start:
     mov ebx, 0
     int 0x88
 
+.rodata
 complete_msg:
     db "[Graphics Demo] Rendered test patterns at 640x480 resolution.", 0

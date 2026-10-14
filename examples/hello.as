@@ -2,8 +2,10 @@
 ; em836 VGA Text Mode Demo (0xB8000 Direct Buffer Writes)
 ; Writes 'H', 'E', 'L', 'L', 'O' in Yellow on Blue to VGA RAM
 ; =============================================================
-
-start:
+.use32
+.org 0
+.code
+main:
     ; Ensure VGA Text Mode (Mode 0)
     mov eax, 0x40           ; SYS_GFX_SET_MODE
     mov ebx, 0              ; 0 = Text 80x25
@@ -62,5 +64,6 @@ start:
     mov ebx, 0
     int 0x88
 
+.rodata
 console_msg:
     db "[VGA Demo] 'HELLO em836' written to 0xB8000.", 0

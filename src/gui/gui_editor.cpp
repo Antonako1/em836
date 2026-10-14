@@ -21,7 +21,7 @@ static const char* SAMPLE_GFX_DEMO =
 "; Demonstrates mode setting, clear screen, rectangles, lines\n"
 "; =============================================================\n"
 "\n"
-"start:\n"
+"main:\n"
 "    ; 1. Set Video Mode to 640x480 Graphics (Mode 1)\n"
 "    mov eax, 0x40           ; SYS_GFX_SET_MODE\n"
 "    mov ebx, 1              ; Mode 1 = Graphics 640x480\n"
@@ -79,7 +79,7 @@ static const char* SAMPLE_VGA_TEXT_DEMO =
 "; Writes colored characters directly to the 80x25 text buffer\n"
 "; =============================================================\n"
 "\n"
-"start:\n"
+"main:\n"
 "    ; Ensure Text Mode (80x25)\n"
 "    mov eax, 0x40           ; SYS_GFX_SET_MODE\n"
 "    mov ebx, 0              ; Mode 0 = Text 80x25\n"
@@ -118,7 +118,7 @@ static const char* SAMPLE_COM1_DEMO =
 "; Writes characters to UART Data Port (0x03F8)\n"
 "; =============================================================\n"
 "\n"
-"start:\n"
+"main:\n"
 "    mov dx, 0x03F8          ; COM1 UART Port\n"
 "    mov al, 0x48            ; 'H'\n"
 "    out dx, al\n"
@@ -155,8 +155,8 @@ static void ExecuteCompileAndRun(Emulator& emu, GuiState& state, bool runAfterCo
 
     emu.GetConsole().AppendBuildLog("[Build Success] Output binary: " + res.binaryPath + "\n");
 
+    AstraCToolchain::IngestFile(res.binaryPath, emu, emu.GetConfig().astracPath);
     if (runAfterCompile) {
-        AstraCToolchain::IngestFile(res.binaryPath, emu, emu.GetConfig().astracPath);
         emu.Start();
     }
 }
