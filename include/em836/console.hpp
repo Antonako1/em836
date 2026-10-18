@@ -129,6 +129,12 @@ public:
     // -------------------------------------------------------------
     bool GetAutoScroll() const { return m_autoScroll; }
     void SetAutoScroll(bool enable) { m_autoScroll = enable; }
+    bool ConsumeScrollToBottom() {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        bool val = m_scrollToBottom;
+        m_scrollToBottom = false;
+        return val;
+    }
 
 private:
     mutable std::mutex m_mutex;
@@ -143,8 +149,9 @@ private:
     // AstraC Build Log storage
     std::string m_buildLogText;
 
-    // Auto-scroll toggle for ImGui window
+    // Auto-scroll toggle and dirty trigger for ImGui window
     bool m_autoScroll = true;
+    bool m_scrollToBottom = false;
 
     // Internal command dispatch
     bool ExecuteCommand(const std::string& cmdLine, Emulator& emu);

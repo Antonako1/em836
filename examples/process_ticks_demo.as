@@ -30,7 +30,7 @@ yield_loop:
     int 0x88
 
     mov eax, SYS_PRINT_CHAR
-    mov ebx, '.'
+    mov ebx, 0x2E               ; '.'
     int 0x88
 
     dec esi
@@ -72,6 +72,6 @@ yield_loop:
     hlt
 
 .rodata
-msg_start db "[Process Demo] Sampling SYS_GET_TICKS (0x03) and calling SYS_YIELD (0x02)", 0
+msg_start db "[Process Demo] Sampling GetTicks (0x03) and calling Yield (0x02)", 0
 msg_done  db "[Process Demo] Completed 5 yields. Delta tick bucket: ", 0
 msg_ms    db " ms.\n", 0

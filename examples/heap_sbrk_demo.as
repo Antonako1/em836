@@ -88,7 +88,7 @@ oom_error:
     hlt
 
 .rodata
-msg_header    db "=== em836 Dynamic Memory (SYS_SBRK 0x30) Demo ===\n", 0
-msg_allocated db "[SYS_SBRK] Allocated 64B at 0x00200000. Contents: ", 0
-msg_done      db "[SYS_SBRK] Second 128B block allocated at 0x00200040 (new break = 0x002000C0).\n", 0
-msg_oom       db "[SYS_SBRK] Out of heap memory!\n", 0
+msg_header    db "=== em836 Dynamic Memory (SBRK 0x30) Demo ===\n", 0
+msg_allocated db "[SBRK 0x30] Allocated 64B at 0x00200000. Contents: ", 0
+msg_done      db "[SBRK 0x30] Second 128B block allocated at 0x00200040 (new break = 0x002000C0).\n", 0
+msg_oom       db "[SBRK 0x30] Out of heap memory!\n", 0

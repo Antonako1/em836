@@ -1,0 +1,72 @@
+// =============================================================================
+// em836 16-Bit Real Mode Astra C Demo (examples/16bit-astrac_c_demo.ac)
+// Compiled with: AstraC.exe comp 16bit-astrac_c_demo.ac arch i286 bits 16
+// Demonstrates 16-bit Astra C (i286) with inline assembly syscall wrappers.
+// =============================================================================
+
+#include "syscalls.inc"
+
+VOID sys16_gfx_set_mode(U16 mode) {
+    asm {
+        mov ax, SYS_GFX_SET_MODE
+        mov bx, mode
+        int 0x88
+    }
+    return;
+}
+
+VOID sys16_gfx_clear(U16 color) {
+    asm {
+        mov ax, SYS_GFX_CLEAR
+        mov bx, color
+        int 0x88
+    }
+    return;
+}
+
+VOID sys16_gfx_fill_rect(U16 x, U16 y, U16 w, U16 h, U16 color) {
+    asm {
+        mov ax, SYS_GFX_FILL_RECT
+        mov bx, x
+        mov cx, y
+        mov dx, w
+        mov si, h
+        mov di, color
+        int 0x88
+    }
+    return;
+}
+
+VOID sys16_print_str(PU8 text) {
+    asm {
+        mov ax, SYS_PRINT_STR
+        mov bx, text
+        mov cx, 0
+        int 0x88
+    }
+    return;
+}
+
+VOID sys16_exit(U16 code) {
+    asm {
+        mov ax, SYS_EXIT
+        mov bx, code
+        int 0x88
+    }
+    return;
+}
+
+U16 main() {
+    sys16_gfx_set_mode(VIDEO_MODE_GFX);
+    sys16_gfx_clear(COLOR_BLUE);
+
+    for (U16 i = 1; i <= 10; i++) {
+        U16 bx_pos = 40 + (i * 50);
+        U16 by_pos = 80 + (i * 25);
+        sys16_gfx_fill_rect(bx_pos, by_pos, 40, 40, i + 2);
+    }
+
+    sys16_print_str("[16-Bit Astra C Demo] Executed i286 16-bit C program!\n");
+    sys16_exit(0);
+    return 0;
+}

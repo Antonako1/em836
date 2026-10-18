@@ -209,8 +209,8 @@ void Emulator::Reset() {
     uc_reg_write(m_uc, UC_X86_REG_ESI, &zero);
     uc_reg_write(m_uc, UC_X86_REG_EDI, &zero);
 
-    // Set initial EIP and ESP according to config
-    uint32_t esp = m_config.defaultStackAddress;
+    // Set initial EIP and ESP according to config (use 0xFFFC in 16-bit Real Mode so SP != 0)
+    uint32_t esp = (m_cpuBits == 16) ? 0x0000FFFC : m_config.defaultStackAddress;
     uint32_t eflags = 0x00000002;
 
     uc_reg_write(m_uc, UC_X86_REG_EIP, &eip);

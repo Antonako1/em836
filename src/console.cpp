@@ -18,18 +18,30 @@ ConsoleSubsystem::ConsoleSubsystem() {
 }
 
 void ConsoleSubsystem::WriteChar(char ch) {
+    if (ch == '\0') return;
     std::lock_guard<std::mutex> lock(m_mutex);
     m_outputText += ch;
     if (m_outputText.length() > m_maxOutputLength) {
         m_outputText.erase(0, m_outputText.length() - (m_maxOutputLength / 2));
     }
+    if (m_autoScroll) {
+        m_scrollToBottom = true;
+    }
 }
 
 void ConsoleSubsystem::WriteText(const std::string& text) {
+    if (text.empty()) return;
     std::lock_guard<std::mutex> lock(m_mutex);
-    m_outputText += text;
+    for (char ch : text) {
+        if (ch != '\0') {
+            m_outputText += ch;
+        }
+    }
     if (m_outputText.length() > m_maxOutputLength) {
         m_outputText.erase(0, m_outputText.length() - (m_maxOutputLength / 2));
+    }
+    if (m_autoScroll) {
+        m_scrollToBottom = true;
     }
 }
 
@@ -72,7 +84,11 @@ bool ConsoleSubsystem::HasInputChar() const {
 
 void ConsoleSubsystem::AppendBuildLog(const std::string& text) {
     std::lock_guard<std::mutex> lock(m_mutex);
-    m_buildLogText += text;
+    for (char ch : text) {
+        if (ch != '\0') {
+            m_buildLogText += ch;
+        }
+    }
 }
 
 void ConsoleSubsystem::ClearBuildLog() {

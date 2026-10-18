@@ -75,6 +75,15 @@ void SyscallDispatcher::HandleCustomSyscall(Emulator& emu) {
     uint32_t esi = emu.ReadRegister(UC_X86_REG_ESI);
     uint32_t edi = emu.ReadRegister(UC_X86_REG_EDI);
 
+    if (emu.GetCpuMode() == 16) {
+        eax &= 0xFFFF;
+        ebx &= 0xFFFF;
+        ecx &= 0xFFFF;
+        edx &= 0xFFFF;
+        esi &= 0xFFFF;
+        edi &= 0xFFFF;
+    }
+
     switch (eax) {
         // -------------------------------------------------------------
         // Process Management
@@ -345,6 +354,13 @@ void SyscallDispatcher::HandleLinuxSyscall(Emulator& emu) {
     uint32_t ecx = emu.ReadRegister(UC_X86_REG_ECX);
     uint32_t edx = emu.ReadRegister(UC_X86_REG_EDX);
 
+    if (emu.GetCpuMode() == 16) {
+        eax &= 0xFFFF;
+        ebx &= 0xFFFF;
+        ecx &= 0xFFFF;
+        edx &= 0xFFFF;
+    }
+
     switch (eax) {
         case 1: // sys_exit
             emu.Halt();
@@ -376,6 +392,10 @@ void SyscallDispatcher::HandleLinuxSyscall(Emulator& emu) {
 void SyscallDispatcher::HandleDosServices(Emulator& emu) {
     uint32_t eax = emu.ReadRegister(UC_X86_REG_EAX);
     uint32_t edx = emu.ReadRegister(UC_X86_REG_EDX);
+    if (emu.GetCpuMode() == 16) {
+        eax &= 0xFFFF;
+        edx &= 0xFFFF;
+    }
     uint8_t ah = static_cast<uint8_t>((eax >> 8) & 0xFF);
 
     if (ah == 0x02) {

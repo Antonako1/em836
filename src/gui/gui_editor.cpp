@@ -56,7 +56,17 @@ bool GuiManager::LoadFileIntoEditor(GuiState& state, const std::string& filePath
     std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return std::tolower(c); });
     state.editorLanguage = (ext == ".ac") ? 1 : 0;
 
-    if (emu) emu->GetConsole().WriteText("[Editor] Loaded: " + resolvedPath + "\n");
+    std::string stemLower = p.stem().string();
+    std::transform(stemLower.begin(), stemLower.end(), stemLower.begin(), [](unsigned char c) { return std::tolower(c); });
+    bool is16Bit = (stemLower.rfind("16bit", 0) == 0) || (content.find(".use16") != std::string::npos);
+
+    if (emu) {
+        uint32_t targetBits = is16Bit ? 16 : 32;
+        if (emu->GetCpuMode() != targetBits) {
+            emu->SetCpuMode(targetBits);
+        }
+        emu->GetConsole().WriteText("[Editor] Loaded: " + resolvedPath + (is16Bit ? " (16-Bit Mode)\n" : " (32-Bit Mode)\n"));
+    }
     return true;
 }
 

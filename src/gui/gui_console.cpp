@@ -33,9 +33,9 @@ void GuiManager::RenderConsoleWindow(Emulator& emu, GuiState& state) {
                 ImGui::BeginChild("terminal_scroll_area", ImVec2(0, -footerHeight), true);
 
                 std::string output = emu.GetConsole().GetOutputText();
-                ImGui::TextUnformatted(output.c_str());
+                ImGui::TextUnformatted(output.data(), output.data() + output.size());
 
-                if (emu.GetConsole().GetAutoScroll() && ImGui::GetScrollY() >= ImGui::GetScrollMaxY()) {
+                if (emu.GetConsole().ConsumeScrollToBottom()) {
                     ImGui::SetScrollHereY(1.0f);
                 }
                 ImGui::EndChild();
@@ -86,7 +86,7 @@ void GuiManager::RenderConsoleWindow(Emulator& emu, GuiState& state) {
                 if (buildLog.empty()) {
                     ImGui::TextDisabled("No compiler activity recorded yet.");
                 } else {
-                    ImGui::TextUnformatted(buildLog.c_str());
+                    ImGui::TextUnformatted(buildLog.data(), buildLog.data() + buildLog.size());
                 }
                 ImGui::EndChild();
 

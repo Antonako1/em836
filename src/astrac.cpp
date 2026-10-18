@@ -168,6 +168,22 @@ CompilationResult AstraCToolchain::CompileFile(const std::string& inputFilePath,
     std::string ext = inPath.extension().string();
     std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return std::tolower(c); });
 
+    std::string stemLower = inPath.stem().string();
+    std::transform(stemLower.begin(), stemLower.end(), stemLower.begin(), [](unsigned char c) { return std::tolower(c); });
+
+    bool is16Bit = (stemLower.rfind("16bit", 0) == 0);
+    if (!is16Bit) {
+        std::ifstream srcCheck(inPath);
+        if (srcCheck.is_open()) {
+            std::string srcContent((std::istreambuf_iterator<char>(srcCheck)), std::istreambuf_iterator<char>());
+            std::string srcLower = srcContent;
+            std::transform(srcLower.begin(), srcLower.end(), srcLower.begin(), [](unsigned char c) { return std::tolower(c); });
+            if (srcLower.find(".use16") != std::string::npos) {
+                is16Bit = true;
+            }
+        }
+    }
+
     std::string subCommand = "asm";
     if (ext == ".ac") {
         subCommand = "comp";
@@ -190,6 +206,9 @@ CompilationResult AstraCToolchain::CompileFile(const std::string& inputFilePath,
     }
 
     std::string cmd = "\"" + astracExe.string() + "\" " + subCommand + " \"" + inPath.string() + "\"";
+    if (is16Bit) {
+        cmd += " arch i286 bits 16";
+    }
     std::string workDir = inPath.parent_path().string();
 
     int exitCode = -1;
@@ -220,7 +239,12 @@ CompilationResult AstraCToolchain::CompileFile(const std::string& inputFilePath,
 
 CompilationResult AstraCToolchain::CompileBuffer(const std::string& sourceCode, bool isAstraC, const std::string& customAstraCPath) {
     std::filesystem::path tempDir = std::filesystem::temp_directory_path();
-    std::filesystem::path tempSource = tempDir / (isAstraC ? "em836_buffer.ac" : "em836_buffer.as");
+    std::string srcLower = sourceCode;
+    std::transform(srcLower.begin(), srcLower.end(), srcLower.begin(), [](unsigned char c) { return std::tolower(c); });
+    bool is16Bit = (srcLower.find(".use16") != std::string::npos);
+
+    std::string baseName = is16Bit ? "16bit_em836_buffer" : "em836_buffer";
+    std::filesystem::path tempSource = tempDir / (baseName + (isAstraC ? ".ac" : ".as"));
 
     std::ofstream file(tempSource);
     if (!file.is_open()) {
@@ -245,6 +269,10 @@ bool AstraCToolchain::IngestFile(const std::string& filePath, Emulator& emu, con
 
     std::string ext = p.extension().string();
     std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return std::tolower(c); });
+
+    std::string stemLower = p.stem().string();
+    std::transform(stemLower.begin(), stemLower.end(), stemLower.begin(), [](unsigned char c) { return std::tolower(c); });
+    bool is16BitFile = (stemLower.rfind("16bit", 0) == 0);
 
     emu.Pause();
 
@@ -275,6 +303,14 @@ bool AstraCToolchain::IngestFile(const std::string& filePath, Emulator& emu, con
         return false;
     }
 
+    // Switch CPU mode (16-bit Real Mode vs 32-bit Protected Mode) if needed before loading
+    uint32_t targetBits = is16BitFile ? 16 : 32;
+    if (emu.GetCpuMode() != targetBits) {
+        emu.SetCpuMode(targetBits);
+        emu.GetConsole().WriteText(std::string("[System] Switched CPU Mode to ") +
+            (targetBits == 16 ? "16-bit Real Mode (i286).\n" : "32-bit Protected Mode (i386).\n"));
+    }
+
     // Reset CPU registers and memory before loading new payload
     emu.Reset();
 
@@ -283,7 +319,7 @@ bool AstraCToolchain::IngestFile(const std::string& filePath, Emulator& emu, con
 
     AcFileHeader header;
     if (ParseAcfhHeader(buffer.data(), buffer.size(), header)) {
-        emu.GetConsole().AppendBuildLog("[Loader] Detected 108-byte ACFH Executable Header.\n");
+        emu.GetConsole().AppendBuildLog("[Loader] Detected 112-byte ACFH Executable Header.\n");
         loadAddress = 0x00000000;
         entryPoint = loadAddress + header.entry_point_offset;
 

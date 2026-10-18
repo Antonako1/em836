@@ -116,5 +116,5 @@ filename        db "em836_file_test.txt", 0
 file_payload    db "Hello from em836 File I/O!\n", 0
 msg_header      db "=== em836 Host File I/O Demo (0x20..0x24) ===\n", 0
 msg_written     db "[File I/O] Wrote 27 bytes to 'em836_file_test.txt'.\n", 0
-msg_read_prefix db "[File I/O] Read after SYS_SEEK(offset=6): ", 0
+msg_read_prefix db "[File I/O] Read after Seek(offset=6): ", 0
 msg_err         db "[File I/O Error] Operation failed.\n", 0

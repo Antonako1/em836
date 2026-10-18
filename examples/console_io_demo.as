@@ -23,7 +23,7 @@ main:
 
     ; 2. Print individual characters using SYS_PRINT_CHAR (0x10)
     mov eax, SYS_PRINT_CHAR
-    mov ebx, '['
+    mov ebx, 0x5B               ; '['
     int 0x88
 
     mov eax, SYS_PRINT_CHAR
@@ -35,7 +35,7 @@ main:
     int 0x88
 
     mov eax, SYS_PRINT_CHAR
-    mov ebx, ']'
+    mov ebx, 0x5D               ; ']'
     int 0x88
 
     mov eax, SYS_PRINT_CHAR
@@ -56,7 +56,7 @@ main:
     mov eax, SYS_WRITE
     mov ebx, FD_STDOUT
     mov ecx, msg_stdout
-    mov edx, 39                 ; Exact byte count
+    mov edx, 38                 ; Exact byte count of msg_stdout (38 bytes)
     int 0x88
 
     ; 5. Check for a queued input character using SYS_READ_CHAR (0x12)
@@ -98,6 +98,6 @@ done:
 .rodata
 msg_banner   db "=== em836 Console I/O Syscall Demo (0x10..0x12) ===\n", 0
 msg_bounded  db "[Bounded String] THIS PART IS TRUNCATED BY ECX=16", 0
-msg_stdout   db "[SYS_WRITE] Written via FD_STDOUT (1)\n", 0
-msg_got_char db "[SYS_READ_CHAR] Read queued character: ", 0
-msg_no_char  db "[SYS_READ_CHAR] Input queue empty (returned -1).\n", 0
+msg_stdout   db "[Write 0x22] Written to stdout fd (1)\n", 0
+msg_got_char db "[ReadChar 0x12] Read queued character: ", 0
+msg_no_char  db "[ReadChar 0x12] Input queue empty (returned -1).\n", 0
