@@ -88,3 +88,6 @@ cmake --build out/build/x64-debug
 # Compile and run the Astra C language demo
 .\out\build\x64-debug\em836.exe examples/astrac_c_demo.ac
 ```
+
+
+![em836](DOCS/em836.png)
