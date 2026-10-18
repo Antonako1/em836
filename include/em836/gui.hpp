@@ -22,6 +22,7 @@
 #include "emulator.hpp"
 #include <string>
 #include <vector>
+#include <filesystem>
 
 // Forward declarations
 struct SDL_Renderer;
@@ -46,6 +47,11 @@ struct GuiState {
     bool showSettingsModal = false;
     bool showLoadOptionsModal = false;
     bool showAboutModal = false;
+
+    // Disassembly view state
+    uint32_t disasmBaseAddress = 0x00000000;
+    bool disasmFollowEip = true;
+    char disasmAddressInput[16] = "00000000";
 
     // Memory Hex Viewer state
     char memoryAddressInput[16] = "00000000";
@@ -85,6 +91,30 @@ public:
      * @param state GuiState reference to initialize.
      */
     static void Initialize(GuiState& state);
+
+    /**
+     * @brief Locates the examples/ directory by searching upward from the current working directory.
+     * @return Canonical absolute path to the examples directory, or "examples" if not found.
+     */
+    static std::filesystem::path FindExamplesDirectory();
+
+    /**
+     * @brief Loads a source file from disk into the in-GUI editor.
+     * @param state GuiState reference.
+     * @param filePath Path to the file on disk.
+     * @param emu Optional Emulator pointer for console logging.
+     * @return True if loaded successfully, false otherwise.
+     */
+    static bool LoadFileIntoEditor(GuiState& state, const std::string& filePath, Emulator* emu = nullptr);
+
+    /**
+     * @brief Saves the current editor text buffer to disk.
+     * @param state GuiState reference.
+     * @param filePath Path to the target file on disk.
+     * @param emu Optional Emulator pointer for console logging.
+     * @return True if saved successfully, false otherwise.
+     */
+    static bool SaveEditorToFile(GuiState& state, const std::string& filePath, Emulator* emu = nullptr);
 
     /**
      * @brief Master render entry point called every frame inside the main loop.

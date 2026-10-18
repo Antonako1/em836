@@ -80,7 +80,7 @@ void SyscallDispatcher::HandleCustomSyscall(Emulator& emu) {
         // Process Management
         // -------------------------------------------------------------
         case SYS_EXIT: {
-            emu.Pause();
+            emu.Halt();
             emu.GetConsole().WriteText("[VM] Process exited with status code " + std::to_string(ebx) + ".\n");
             emu.WriteRegister(UC_X86_REG_EAX, 0);
             break;
@@ -347,7 +347,7 @@ void SyscallDispatcher::HandleLinuxSyscall(Emulator& emu) {
 
     switch (eax) {
         case 1: // sys_exit
-            emu.Pause();
+            emu.Halt();
             emu.GetConsole().WriteText("[VM] Linux sys_exit(" + std::to_string(ebx) + ")\n");
             emu.WriteRegister(UC_X86_REG_EAX, 0);
             break;
@@ -393,7 +393,7 @@ void SyscallDispatcher::HandleDosServices(Emulator& emu) {
         emu.GetConsole().WriteText(str);
     } else if (ah == 0x4C) {
         // Terminate Process
-        emu.Pause();
+        emu.Halt();
         emu.GetConsole().WriteText("[VM] DOS process terminated.\n");
     }
 }

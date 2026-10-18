@@ -1,98 +1,88 @@
-# Debugger UI Reference — em836
+# Interactive Debugger UI Reference — em836
 
-**em836** features a full Dear ImGui debugger interface providing real-time inspection, hardware controls, memory visualization, interactive disassembly, and code editing.
-
----
-
-## 1. Window Overview & Layout
-
-```text
-+-----------------------------------------------------------------------------------------------------------------+
-| File  Emulation  View  Help                                                                                     |
-+------------------------------------+------------------------------------+---------------------------------------+
-| CPU Registers                      | Execution Controls                 | Code Editor                           |
-| EAX: 00000000  EBX: 00000000       | [ Run ] [ Step ] [ Reset ]         | [ Assembly (.as) v ] [Compile & Run]  |
-| ECX: 00000000  EDX: 00000000       | Clock Speed: [ Unlimited v ]       | 1 | start:                            |
-| ESI: 00000000  EDI: 00000000       | Arch: [ 32-bit Protected Mode v ]  | 2 |     mov eax, 0x40                 |
-| ESP: 00800000  EBP: 00800000       | Status: [ RUNNING / PAUSED ]       | 3 |     mov ebx, 1                    |
-| EIP: 00000000  EFLAGS: 00000002    | EIP: 0x00000000                    | 4 |     int 0x88                      |
-| Flags: [CF][PF][AF][ZF][SF][IF][OF]|                                    |                                       |
-+------------------------------------+------------------------------------+---------------------------------------+
-| Disassembly (Capstone)                          | VGA Display (Dual Mode: Text 80x25 & GFX 640x480)             |
-| [BP] PTR  Address   Bytes        Instruction    | [x] Text Mode (0xB8000)   ( ) Graphics Mode (0xA0000)         |
-| [ ]  =>   00000000  B8 40 00 00  mov eax, 0x40  | +-----------------------------------------------------------+ |
-| [ ]       00000005  BB 01 00 00  mov ebx, 1     | | VGA 640x480 Output Canvas (4:3 Aspect Ratio)              | |
-| [x]       0000000A  CD 88        int 0x88       | +-----------------------------------------------------------+ |
-+-------------------------------------------------+---------------------------------------------------------------+
-| Memory Hex Viewer                               | Console & Output                                              |
-| Jump: [Origin] [EIP] [VGA] [GFX] [Stack] [Addr] | Tab 1: Virtual Terminal  |  Tab 2: AstraC Build Log           |
-| 00000000: B8 40 00 00 BB 01 ...  .@....         | > Output stream logs & guest input prompt                     |
-+-------------------------------------------------+---------------------------------------------------------------+
-```
+**em836** provides a 60 FPS hardware-accelerated **Dear ImGui + SDL3** docking interface composed of seven interactive inspection viewports and four configuration modals.
 
 ---
 
-## 2. Window Breakdown
+## 1. Global Keyboard Shortcuts
 
-### 1. CPU Registers
-- **General Purpose Registers**: Displays `EAX`, `EBX`, `ECX`, `EDX`, `ESI`, `EDI`, `ESP`, and `EBP` in 32-bit hexadecimal. While paused, any register value can be edited directly.
-- **Instruction Pointer & Flags**: Displays `EIP` and `EFLAGS`.
-- **Interactive EFLAGS Badges**: Color-coded badges for `CF`, `PF`, `AF`, `ZF`, `SF`, `IF`, `DF`, and `OF`. Green denotes `1` (set); dark gray denotes `0` (cleared). Clicking any badge while paused toggles that flag bit in real-time.
-- **Segment Registers**: Displays `CS`, `DS`, `ES`, `FS`, `GS`, `SS`.
-- **Instruction Counter**: Displays total CPU instructions executed.
+| Shortcut | Action |
+| :--- | :--- |
+| **`F5`** | Toggle **Run / Pause** execution (if Halted, automatically resets and restarts from entry point). |
+| **`F10`** | **Single Step** one x86 instruction while paused. |
+| **`Ctrl+R`** | **Reset CPU & Memory**: zeroes RAM, restores cached binary payload, flushes JIT caches, and resets registers. |
+| **`Ctrl+O`** | Open the **Open Program File...** dialog. |
+| **`Ctrl+,`** | Open the **Emulator Settings...** dialog. |
+| **`Alt+F4`** | Exit **em836**. |
 
-### 2. Execution Controls
-- **Run / Pause**: Starts continuous asynchronous execution or pauses the VM.
-- **Step**: Executes exactly one instruction and pauses.
-- **Reset**: Halts execution, resets registers to default values, and clears instruction counters.
-- **Clock Speed Throttling Dropdown**:
-  - `Unlimited (Max)`: Executes at host CPU speed.
-  - `10 Hz`, `100 Hz`, `1 kHz`, `10 kHz`, `100 kHz`, `1 MHz`: Throttles execution rate for human-speed observation of loops, registers, and visual drawing routines.
-- **Architecture Selector**: Switches between `32-bit Protected Mode` and `16-bit Real Mode`.
-- **Status Indicator**: High-contrast badge showing `[ RUNNING ]`, `[ PAUSED ]`, `[ STEPPING ]`, `[ HALTED ]`, or `[ ERROR ]`.
+---
 
-### 3. Disassembly (Capstone Engine)
-- **Live Disassembly**: Decodes x86 instructions surrounding `EIP` in real time using Capstone.
-- **`=>` Pointer Marker**: High-contrast yellow arrow highlighting the next instruction about to execute.
-- **Interactive Breakpoints (`[BP]`)**: Click any checkbox in the `BP` column to toggle an execution breakpoint at that instruction address. The emulator automatically pauses when a breakpoint is encountered.
-- **Opcode Bytes**: Displays instruction opcode and operand bytes in hexadecimal.
+## 2. Docking Windows Reference
 
-### 4. VGA Display (Dual-Mode Canvas)
-- **Mode Toggle**: Instantly switch between:
-  - `Text Mode (80x25 @ 0xB8000)`: IBM CP437 character grid with 16 IBM PC foreground and background colors rendered via built-in 8×16 font bitmap.
-  - `Graphics Mode (640x480 @ 0xA0000)`: Flat 1-byte-per-pixel 16-color linear framebuffer.
-- **Clear Screen**: One-click screen wipe.
-- **Aspect Ratio Maintenance**: Maintains accurate 4:3 CRT proportion regardless of window resizing.
+### 2.1 CPU Registers
+Displays a real-time, thread-safe snapshot of the i386 processor state:
+- **General-Purpose Registers (32-bit)**: `EAX`, `EBX`, `ECX`, `EDX`, `ESI`, `EDI`.
+- **Pointer & Index Registers**: `EIP` (Instruction Pointer), `ESP` (Stack Pointer), `EBP` (Base Pointer).
+- **Segment Selectors (16-bit)**: `CS`, `DS`, `ES`, `FS`, `GS`, `SS`.
+  > In 32-bit Protected Mode (`UC_MODE_32`), Unicorn maintains flat 4 GB segment descriptors (`D/B=1`). Segment registers are only zeroed when operating in 16-bit Real Mode (`UC_MODE_16`).
+- **EFLAGS Bit Badges**: Visual color-coded indicators for `CF` (Carry), `PF` (Parity), `AF` (Auxiliary), `ZF` (Zero), `SF` (Sign), `TF` (Trap), `IF` (Interrupt), `DF` (Direction), and `OF` (Overflow).
+- **Instruction Counter**: Total instructions executed since the last reset.
 
-### 5. Memory Hex Viewer
-- **16-Byte Hex Dump**: Scrollable memory view with hexadecimal bytes and printable ASCII sidebar.
-- **Quick-Jump Targets**:
-  - `Origin 0x0`: Physical address `0x00000000`.
-  - `EIP`: Jump to the current instruction pointer.
-  - `VGA (0xB8000)`: Jump to text mode memory.
-  - `GFX (0xA0000)`: Jump to graphics framebuffer.
-  - `Stack (ESP)`: Jump to the active stack top.
-- **Address Search**: Hexadecimal input box with Enter key navigation.
-- **Page Step**: `< Prev` and `Next >` navigation buttons.
+### 2.2 Execution Controls
+- **Transport Buttons**: `Run` / `Pause`, `Step` (single instruction), and `Reset`.
+- **Clock Speed Throttling**:
+  - `Unlimited`: Executes 25,000-instruction quanta per 1 ms yield slice for maximum throughput.
+  - `10 Hz`, `100 Hz`, `1 kHz`, `10 kHz`, `100 kHz`, `1 MHz`: Cycle-throttled modes for human-speed visual debugging of loops, register transitions, and drawing routines.
+- **CPU Mode Selector**: Switches between `32-bit Protected Mode (i386)` and `16-bit Real Mode (i286/8086)`.
+- **VM Status Badge**: High-contrast badge indicating `[ RUNNING ]`, `[ PAUSED ]`, `[ STEPPING ]`, `[ HALTED ]`, or `[ ERROR ]`.
 
-### 6. Console & Output
+### 2.3 Disassembly (Capstone Engine)
+- **Real-Time x86 Disassembly**: Uses Capstone Engine (`CS_ARCH_X86`) to decode instructions from guest RAM into Intel syntax (`mnemonic op_str`) alongside raw hexadecimal opcode bytes.
+- **Navigation Toolbar**:
+  - `Follow EIP`: Keeps the disassembly viewport tracking `EIP` automatically whenever execution steps outside the visible window.
+  - `Goto EIP`: Jumps the disassembly base address directly to current `EIP`.
+  - `Origin (0x0)`: Jumps to `0x00000000`.
+  - `Address Input`: Hexadecimal address box to inspect instructions at any physical RAM offset.
+- **Execution Pointer (`=>`)**: Yellow marker highlighting the instruction at current `EIP`.
+- **Interactive Breakpoints (`[BP]`)**: Click any row's checkbox to toggle a hardware-assisted execution breakpoint (`UC_HOOK_CODE`) at that instruction address.
+
+### 2.4 VGA Display (Dual-Mode Canvas)
+- Renders the active video mode at 60 FPS while preserving a 4:3 CRT aspect ratio:
+  - **Text Mode (`80x25 @ 0xB8000`)**: CP437 8×16 font with 16 foreground and 16 background colors.
+  - **Graphics Mode (`640x480 @ 0xA0000`)**: 16-color linear pixel buffer.
+- Includes a mode switcher dropdown and a **Clear Screen** button.
+
+### 2.5 Memory Hex Viewer
+- **16-Byte Hex & ASCII Table**: Displays physical address, 16 hexadecimal byte columns, and printable ASCII characters.
+- **Quick-Jump Buttons**:
+  - `Origin 0x0` (`0x00000000`)
+  - `EIP` (Current Instruction Pointer)
+  - `VGA (0xB8000)` (Text Mode Video RAM)
+  - `GFX (0xA0000)` (Graphics Framebuffer RAM)
+  - `Stack (ESP)` (Current Stack Top)
+- **Page Controls**: `< Prev` and `Next >` buttons step backward/forward through guest RAM.
+
+### 2.6 Console & Output
 - **Virtual Terminal Tab**:
-  - Displays output from custom syscalls (`SYS_PRINT_CHAR`, `SYS_PRINT_STR`), legacy interrupts (`INT 0x10`, `INT 0x80`, `INT 0x21`), and UART COM1 port writes (`OUT 0x3F8, AL`).
-  - Interactive input field: Accepts emulator commands (`help`, `run`, `pause`, `step`, `reset`, `load <file>`, `speed <hz>`, `mode <text|gfx>`, `mem <addr>`, `reg`, `bp <addr>`) or routes keystrokes into the guest application's input queue (`SYS_READ_CHAR`).
-  - Auto-scroll and Clear Terminal controls.
+  - Displays output from `INT 0x88` (`SYS_PRINT_CHAR`, `SYS_PRINT_STR`, `SYS_WRITE`), legacy interrupts (`INT 0x10`, `INT 0x21`, `INT 0x80`), and I/O ports (`0x03F8`, `0x00E9`).
+  - Interactive command & input prompt with up/down command history.
 - **AstraC Build Log Tab**:
-  - Displays stdout and stderr output from AstraC compiler runs, showing exit codes, syntax errors, and symbol tables.
+  - Displays compiler/assembler stdout, stderr, file paths, and exit status from `AstraC.exe`.
 
-### 7. In-GUI Code Editor
-- Multi-line assembly and Astra C editor with line numbers.
-- **Compile & Run**: Compiles code buffer directly via AstraC and starts execution in one click.
-- **Load Sample Code**: Built-in templates for Graphics Mode, Text Mode, and Serial COM1 demos.
+### 2.7 Code Editor
+- **Language Selector**: Switch between `Assembly (.as)` and `Astra C (.ac)`.
+- **`Examples...` Popup**: Automatically locates the repository [`examples/`](../examples/) folder (walking up parent directories automatically when launched from `out/build/x64-debug`) and lists all `.as` and `.ac` sample programs.
+- **In-Place File Workflow**:
+  - **`Compile & Run`**: Saves edits directly to the active file on disk, invokes [`AstraC.exe`](https://antonako.net/astrac/index.php), invalidates Unicorn's JIT translation cache, loads the new binary, and starts execution.
+  - **`Compile Only`**: Compiles and loads the binary into RAM in a paused state at `EIP = 0` for single-stepping.
+  - **`Save` / `Reload`**: Saves buffer changes to disk or reloads the file from disk.
+  - **Status Indicator**: Displays the active filename (`[graphics_demo.as *]`) with a hover tooltip showing the canonical absolute path.
 
 ---
 
 ## 3. Modal Dialogs
 
-- **File -> Open Program File...**: Load and execute any `.as`, `.ac`, `.bin`, or `.exe` file.
-- **File -> Execution Setup / Load Options...**: Configure custom Base Load Address, initial `EIP`, and initial `ESP` before loading.
-- **File -> Settings...**: Configure AstraC executable path, total guest RAM size (4 MB to 64 MB), and default clock speeds. Settings persist automatically to `config.json`.
-- **Help -> About em836**: Version and component attribution.
+- **File $\to$ Open Program File... (`Ctrl+O`)**: Enter a path to any `.as`, `.ac`, `.bin`, or `.exe` file to open, compile, and run.
+- **File $\to$ Execution Setup / Load Options...**: Customize Load Base Address, Initial `EIP`, and Initial `ESP`.
+- **File $\to$ Settings... (`Ctrl+,`)**: Configure custom `AstraC.exe` path, guest physical RAM size (4 MB–64 MB), and default clock frequency (persisted to `config.json`).
+- **Help $\to$ About em836**: Version and subsystem overview.

@@ -7,61 +7,29 @@
 #include "em836/astrac.hpp"
 #include <imgui.h>
 
+#include <filesystem>
+#include <vector>
+
 namespace em836 {
 
-// Initial default code loaded into the in-GUI editor
-static const char* DEFAULT_EDITOR_CODE =
-"; =============================================================\n"
-"; em836 Assembly Program Sample\n"
-"; Draws graphics and prints message to virtual terminal\n"
-"; =============================================================\n"
-"\n"
-"start:\n"
-"    ; Switch to 640x480 Graphics Mode\n"
-"    mov eax, 0x40           ; SYS_GFX_SET_MODE\n"
-"    mov ebx, 1              ; 1 = Graphics 640x480\n"
-"    int 0x88\n"
-"\n"
-"    ; Clear screen to Black (Color 0)\n"
-"    mov eax, 0x41           ; SYS_GFX_CLEAR\n"
-"    mov ebx, 0\n"
-"    int 0x88\n"
-"\n"
-"    ; Draw a Cyan header rectangle (Color 3)\n"
-"    mov eax, 0x44           ; SYS_GFX_FILL_RECT\n"
-"    mov ebx, 40             ; X\n"
-"    mov ecx, 30             ; Y\n"
-"    mov edx, 560            ; Width\n"
-"    mov esi, 80             ; Height\n"
-"    mov edi, 3              ; Color 3 (Cyan)\n"
-"    int 0x88\n"
-"\n"
-"    ; Draw an intersecting Yellow diagonal line (Color 14)\n"
-"    mov eax, 0x43           ; SYS_GFX_LINE\n"
-"    mov ebx, 40\n"
-"    mov ecx, 30\n"
-"    mov edx, 600\n"
-"    mov esi, 110\n"
-"    mov edi, 14\n"
-"    int 0x88\n"
-"\n"
-"    ; Print greeting string to terminal\n"
-"    mov eax, 0x11           ; SYS_PRINT_STR\n"
-"    mov ebx, hello_msg\n"
-"    mov ecx, 0\n"
-"    int 0x88\n"
-"\n"
-"    ; Clean program exit\n"
-"    mov eax, 0x01           ; SYS_EXIT\n"
-"    mov ebx, 0\n"
-"    int 0x88\n"
-"\n"
-"hello_msg:\n"
-"    db \"[Hello] em836 i386 Virtual Machine Running!\", 10, 0\n";
-
 void GuiManager::Initialize(GuiState& state) {
-    state.editorText = DEFAULT_EDITOR_CODE;
     state.editorLanguage = 0; // Assembly
+    state.disasmBaseAddress = 0x00000000;
+    snprintf(state.disasmAddressInput, sizeof(state.disasmAddressInput), "%08X", state.disasmBaseAddress);
+    state.disasmFollowEip = true;
+
+    // Load initial example program from disk
+    std::filesystem::path defaultExample = FindExamplesDirectory() / "graphics_demo.as";
+    bool loaded = false;
+    if (std::filesystem::exists(defaultExample)) {
+        loaded = LoadFileIntoEditor(state, defaultExample.string(), nullptr);
+    }
+
+    if (!loaded) {
+        state.editorText = "; No example file found.\nstart:\n    mov eax, 1\n    int 0x88\n";
+        state.editorFilePath = "";
+        state.editorModified = false;
+    }
 }
 
 void GuiManager::RenderMainMenuBar(Emulator& emu, GuiState& state, SDL_Renderer* renderer) {

@@ -155,6 +155,11 @@ public:
     void Pause();
 
     /**
+     * @brief Halts CPU execution when guest invokes SYS_EXIT, executes HLT, or reaches end of code.
+     */
+    void Halt();
+
+    /**
      * @brief Executes exactly one instruction and pauses.
      */
     void Step();
@@ -244,9 +249,19 @@ public:
     size_t GetRamSize() const { return m_ramSize; }
     uc_engine* GetUnicornEngine() { return m_uc; }
 
+    uint32_t GetCodeBaseAddress() const { return m_codeBaseAddress; }
+    uint32_t GetCodeSize() const { return m_codeSize; }
+
 private:
     EmulatorConfig m_config;
     EmulatorStatus m_status = EmulatorStatus::Stopped;
+
+    // Loaded Binary Cache for Resets and Boundary Protection
+    std::vector<uint8_t> m_loadedBinary;
+    uint32_t m_loadedLoadAddress = 0;
+    uint32_t m_loadedEntryPoint = 0;
+    uint32_t m_codeBaseAddress = 0;
+    uint32_t m_codeSize = 0;
 
     // Unicorn Engine
     uc_engine* m_uc = nullptr;
@@ -266,6 +281,7 @@ private:
     std::thread m_workerThread;
     std::atomic<bool> m_workerShouldRun{false};
     std::atomic<bool> m_workerActive{false};
+    std::atomic<bool> m_workerRunningQuantum{false};
     std::atomic<bool> m_stepRequested{false};
     std::atomic<uint32_t> m_clockSpeedHz{0};
     std::atomic<uint32_t> m_cpuBits{32};

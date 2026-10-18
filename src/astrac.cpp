@@ -26,7 +26,7 @@ std::filesystem::path AstraCToolchain::FindAstraC(const std::string& customPath)
     if (!customPath.empty()) {
         std::filesystem::path p(customPath);
         if (std::filesystem::exists(p)) {
-            return p;
+            return std::filesystem::weakly_canonical(std::filesystem::absolute(p));
         }
     }
 
@@ -34,6 +34,8 @@ std::filesystem::path AstraCToolchain::FindAstraC(const std::string& customPath)
     const std::vector<std::filesystem::path> candidates = {
         "../AstraC/build/Release/AstraC.exe",
         "../../AstraC/build/Release/AstraC.exe",
+        "../../../AstraC/build/Release/AstraC.exe",
+        "../../../../AstraC/build/Release/AstraC.exe",
         "C:/Users/anton/source/repos/AstraC/build/Release/AstraC.exe",
         "./AstraC.exe",
         "build/Release/AstraC.exe"
@@ -41,7 +43,7 @@ std::filesystem::path AstraCToolchain::FindAstraC(const std::string& customPath)
 
     for (const auto& cand : candidates) {
         if (std::filesystem::exists(cand)) {
-            return std::filesystem::canonical(cand);
+            return std::filesystem::weakly_canonical(std::filesystem::absolute(cand));
         }
     }
 
@@ -159,6 +161,10 @@ CompilationResult AstraCToolchain::CompileFile(const std::string& inputFilePath,
         return result;
     }
 
+    // Resolve to an absolute canonical path so setting workDir to inPath.parent_path()
+    // never invalidates a relative input path argument passed to AstraC.exe.
+    inPath = std::filesystem::weakly_canonical(std::filesystem::absolute(inPath));
+
     std::string ext = inPath.extension().string();
     std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return std::tolower(c); });
 
@@ -170,11 +176,17 @@ CompilationResult AstraCToolchain::CompileFile(const std::string& inputFilePath,
     // Determine target binary output path
     std::filesystem::path binaryPath = inPath;
     binaryPath.replace_extension(".bin");
+    std::filesystem::path upperBin = inPath;
+    upperBin.replace_extension(".BIN");
 
-    // Remove existing stale binary if present
+    // Remove existing stale binaries if present
     if (std::filesystem::exists(binaryPath)) {
         std::error_code ec;
         std::filesystem::remove(binaryPath, ec);
+    }
+    if (std::filesystem::exists(upperBin)) {
+        std::error_code ec;
+        std::filesystem::remove(upperBin, ec);
     }
 
     std::string cmd = "\"" + astracExe.string() + "\" " + subCommand + " \"" + inPath.string() + "\"";
@@ -195,17 +207,12 @@ CompilationResult AstraCToolchain::CompileFile(const std::string& inputFilePath,
     if (ok && std::filesystem::exists(binaryPath)) {
         result.success = true;
         result.binaryPath = binaryPath.string();
+    } else if (ok && std::filesystem::exists(upperBin)) {
+        result.success = true;
+        result.binaryPath = upperBin.string();
     } else {
-        // Also check if AstraC emitted .BIN with uppercase
-        std::filesystem::path upperBin = inPath;
-        upperBin.replace_extension(".BIN");
-        if (std::filesystem::exists(upperBin)) {
-            result.success = true;
-            result.binaryPath = upperBin.string();
-        } else {
-            result.success = false;
-            result.errorMessage = "AstraC failed to generate binary output.";
-        }
+        result.success = false;
+        result.errorMessage = "AstraC failed to generate binary output.";
     }
 
     return result;
@@ -276,15 +283,16 @@ bool AstraCToolchain::IngestFile(const std::string& filePath, Emulator& emu, con
 
     AcFileHeader header;
     if (ParseAcfhHeader(buffer.data(), buffer.size(), header)) {
-        emu.GetConsole().AppendBuildLog("[Loader] Detected ACFH Executable Header.\n");
-        entryPoint = header.entry_point;
-        loadAddress = header.entry_point;
+        emu.GetConsole().AppendBuildLog("[Loader] Detected 108-byte ACFH Executable Header.\n");
+        loadAddress = 0x00000000;
+        entryPoint = loadAddress + header.entry_point_offset;
 
-        // Load code segment
-        if (header.code_offset + header.code_size <= buffer.size()) {
-            emu.LoadBinary(buffer.data() + header.code_offset, header.code_size, loadAddress, entryPoint);
+        // Load contiguous payload starting at code_offset (.code + .data + .rodata)
+        if (header.code_offset < buffer.size()) {
+            size_t payloadSize = buffer.size() - header.code_offset;
+            emu.LoadBinary(buffer.data() + header.code_offset, payloadSize, loadAddress, entryPoint);
         } else {
-            // Fallback: load full payload
+            // Fallback: load full payload after 108-byte ACFH header
             emu.LoadBinary(buffer.data() + sizeof(AcFileHeader), buffer.size() - sizeof(AcFileHeader), loadAddress, entryPoint);
         }
     } else {

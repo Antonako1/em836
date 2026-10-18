@@ -41,7 +41,7 @@ static void RenderRegisterRow(const char* label, uint32_t& regVal, Emulator& emu
     ImGui::SetNextItemWidth(75);
     std::string id = "##reg_" + std::string(label);
     if (ImGui::InputText(id.c_str(), buf, sizeof(buf), ImGuiInputTextFlags_CharsHexadecimal | ImGuiInputTextFlags_EnterReturnsTrue)) {
-        if (state.status == EmulatorStatus::Paused) {
+        if (state.status == EmulatorStatus::Paused || state.status == EmulatorStatus::Halted) {
             regVal = static_cast<uint32_t>(strtoul(buf, nullptr, 16));
             emu.ApplyCpuState(state);
         }

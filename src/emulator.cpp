@@ -22,66 +22,7 @@ Emulator::Emulator() {
 Emulator::~Emulator() {
     Shutdown();
 }
-#ifdef _WIN32
-#include <psapi.h>
-static const char *ProtToStr( DWORD prot )
-{
-    switch ( prot ) {
-        case PAGE_NOACCESS: return "NOACCESS";
-        case PAGE_READONLY: return "READONLY";
-        case PAGE_READWRITE: return "READWRITE";
-        case PAGE_WRITECOPY: return "WRITECOPY";
-        case PAGE_EXECUTE: return "EXECUTE";
-        case PAGE_EXECUTE_READ: return "EXECUTE_READ";
-        case PAGE_EXECUTE_READWRITE: return "EXECUTE_READWRITE";
-        case PAGE_EXECUTE_WRITECOPY: return "EXECUTE_WRITECOPY";
-        default:
-            if ( prot & PAGE_GUARD ) return "GUARD";
-            return "UNKNOWN";
-    }
-}
-static const char *StateToStr( DWORD state )
-{
-    switch ( state ) {
-        case MEM_COMMIT: return "COMMIT";
-        case MEM_RESERVE: return "RESERVE";
-        case MEM_FREE: return "FREE";
-        default: return "UNKNOWN";
-    }
-}
-static void DumpMemoryInfo( void *addr )
-{
-    MEMORY_BASIC_INFORMATION mbi;
-    if ( VirtualQuery( addr, &mbi, sizeof( mbi ) ) == sizeof( mbi ) ) {
-        std::cout << "[meminfo] addr=" << addr
-            << " Base=" << mbi.BaseAddress
-            << " RegionSize=" << mbi.RegionSize
-            << " State=" << StateToStr( mbi.State )
-            << " Protect=" << ProtToStr( mbi.Protect )
-            << " Type=" << mbi.Type << "\n";
-    }
-    else {
-        std::cout << "[meminfo] VirtualQuery failed for " << addr << " err=" << GetLastError() << "\n";
-    }
-}
-static void ListLoadedModules()
-{
-    HMODULE mods[1024];
-    DWORD cbNeeded;
-    if ( EnumProcessModules( GetCurrentProcess(), mods, sizeof( mods ), &cbNeeded ) ) {
-        size_t count = cbNeeded / sizeof( HMODULE );
-        for ( size_t i = 0; i < count; ++i ) {
-            char path[MAX_PATH] = { 0 };
-            if ( GetModuleFileNameA( mods[i], path, MAX_PATH ) ) {
-                std::cout << "[mod] " << path << "\n";
-            }
-        }
-    }
-    else {
-        std::cout << "[mod] EnumProcessModules failed err=" << GetLastError() << "\n";
-    }
-}
-#endif
+
 
 bool Emulator::Initialize(const EmulatorConfig& config) {
     Shutdown();
@@ -204,43 +145,6 @@ bool Emulator::ReinitUnicorn(uint32_t bits) {
     // Map physical RAM pointer into Unicorn address space starting at 0x00000000
 
 
-    // Insert inside ReinitUnicorn() after uc_open(...) and before uc_mem_map_ptr(...)
-#ifdef _WIN32
-    // Diagnostic: print pointer size and Unicorn mode constants
-    std::cout << "[diag] sizeof(void*)=" << sizeof( void * ) << "\n";
-    std::cout << "[diag] UC_MODE_16=" << static_cast<uint64_t>(UC_MODE_16)
-        << " UC_MODE_32=" << static_cast<uint64_t>(UC_MODE_32)
-        << " computed ucMode=" << static_cast<uint64_t>(ucMode) << "\n";
-    std::cout << "[diag] m_ram=" << reinterpret_cast<void *>(m_ram)
-        << " m_ramSize=" << m_ramSize << "\n";
-
-// VirtualQuery the m_ram region to confirm COMMIT/PROTECT
-    MEMORY_BASIC_INFORMATION mbi;
-    if ( VirtualQuery( m_ram, &mbi, sizeof( mbi ) ) == sizeof( mbi ) ) {
-        std::cout << "[diag] m_ram State=" << mbi.State << " Protect=" << mbi.Protect
-            << " RegionSize=" << mbi.RegionSize << " BaseAddress=" << mbi.BaseAddress << "\n";
-    }
-    else {
-        std::cout << "[diag] VirtualQuery failed on m_ram\n";
-    }
-
-    // Attempt to locate the unicorn DLL module handle (common names)
-    HMODULE hMod = GetModuleHandleA( "unicorn.dll" );
-    if ( !hMod ) hMod = GetModuleHandleA( "libunicorn.dll" );
-    if ( hMod ) {
-        char path[MAX_PATH] = { 0 };
-        GetModuleFileNameA( hMod, path, MAX_PATH );
-        std::cout << "[diag] unicorn module loaded from: " << path << "\n";
-    }
-    else {
-        std::cout << "[diag] unicorn module not found via GetModuleHandleA(\"unicorn.dll\")\n";
-    }
-#endif
-
-    DumpMemoryInfo( m_ram ); // you already confirmed this is OK
-    DumpMemoryInfo( reinterpret_cast<void *>(m_uc) ); // replace with the code_buffer address you saw
-    ListLoadedModules(); // to find the exact unicorn module file name/path
-
     err = uc_mem_map_ptr(m_uc, 0x00000000, m_ramSize, UC_PROT_ALL, m_ram);
     if (err != UC_ERR_OK) {
         m_cachedState.lastErrorMessage = "Failed to map guest RAM into Unicorn: " + std::string(uc_strerror(err));
@@ -267,6 +171,35 @@ void Emulator::Reset() {
     std::lock_guard<std::mutex> lock(m_stateMutex);
     if (!m_uc) return;
 
+    // Invalidate Unicorn Translation Block (TB) and TLB caches so new code is cleanly translated
+    uc_ctl_flush_tb(m_uc);
+    uc_ctl_flush_tlb(m_uc);
+
+    // Reset status to Paused
+    m_status = EmulatorStatus::Paused;
+    m_cachedState.status = EmulatorStatus::Paused;
+    m_cachedState.lastErrorMessage.clear();
+
+    // Zero out physical RAM
+    if (m_ram) {
+        std::memset(m_ram, 0, m_ramSize);
+    }
+
+    // Determine initial entry address
+    uint32_t eip = m_config.defaultEntryAddress;
+
+    // Restore cached binary if loaded
+    if (!m_loadedBinary.empty() && m_ram) {
+        if (m_loadedLoadAddress + m_loadedBinary.size() <= m_ramSize) {
+            std::memcpy(m_ram + m_loadedLoadAddress, m_loadedBinary.data(), m_loadedBinary.size());
+            eip = m_loadedEntryPoint;
+        }
+    }
+
+    // Flush TB and TLB again after RAM update
+    uc_ctl_flush_tb(m_uc);
+    uc_ctl_flush_tlb(m_uc);
+
     // Zero out general purpose registers
     uint32_t zero = 0;
     uc_reg_write(m_uc, UC_X86_REG_EAX, &zero);
@@ -277,7 +210,6 @@ void Emulator::Reset() {
     uc_reg_write(m_uc, UC_X86_REG_EDI, &zero);
 
     // Set initial EIP and ESP according to config
-    uint32_t eip = m_config.defaultEntryAddress;
     uint32_t esp = m_config.defaultStackAddress;
     uint32_t eflags = 0x00000002;
 
@@ -286,38 +218,63 @@ void Emulator::Reset() {
     uc_reg_write(m_uc, UC_X86_REG_EBP, &esp);
     uc_reg_write(m_uc, UC_X86_REG_EFLAGS, &eflags);
 
-    // Set segment registers
-    uint16_t segZero = 0;
-    uc_reg_write(m_uc, UC_X86_REG_CS, &segZero);
-    uc_reg_write(m_uc, UC_X86_REG_DS, &segZero);
-    uc_reg_write(m_uc, UC_X86_REG_ES, &segZero);
-    uc_reg_write(m_uc, UC_X86_REG_FS, &segZero);
-    uc_reg_write(m_uc, UC_X86_REG_GS, &segZero);
-    uc_reg_write(m_uc, UC_X86_REG_SS, &segZero);
+    // Segment registers: In 32-bit Protected Mode (UC_MODE_32), Unicorn establishes
+    // flat 4GB descriptors with D/B=1 (32-bit default operand size). Writing 0 to CS or data
+    // segments invalidates the hidden descriptor cache and forces 16-bit decoding.
+    if (m_cpuBits == 16) {
+        uint16_t segZero = 0;
+        uc_reg_write(m_uc, UC_X86_REG_CS, &segZero);
+        uc_reg_write(m_uc, UC_X86_REG_DS, &segZero);
+        uc_reg_write(m_uc, UC_X86_REG_ES, &segZero);
+        uc_reg_write(m_uc, UC_X86_REG_FS, &segZero);
+        uc_reg_write(m_uc, UC_X86_REG_GS, &segZero);
+        uc_reg_write(m_uc, UC_X86_REG_SS, &segZero);
+    }
 
     m_cachedState.instructionCount = 0;
+    m_vga.ClearScreen(m_ram, m_ramSize, 0);
     m_syscalls.Reset();
     RefreshStateCache();
 }
 
 void Emulator::Start() {
     if (m_status == EmulatorStatus::Stopped || m_status == EmulatorStatus::Error) return;
+    if (m_status == EmulatorStatus::Halted) {
+        Reset();
+    }
     m_workerActive = true;
     m_status = EmulatorStatus::Running;
 }
 
 void Emulator::Pause() {
-    if (m_status == EmulatorStatus::Running || m_status == EmulatorStatus::Stepping) {
-        m_workerActive = false;
-        if (m_uc) {
-            uc_emu_stop(m_uc);
-        }
-        m_status = EmulatorStatus::Paused;
+    m_workerActive = false;
+    if (m_uc) {
+        uc_emu_stop(m_uc);
     }
+    for (int i = 0; i < 50 && m_workerRunningQuantum.load(); ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    m_status = EmulatorStatus::Paused;
+    m_cachedState.status = EmulatorStatus::Paused;
+}
+
+void Emulator::Halt() {
+    m_workerActive = false;
+    if (m_uc) {
+        uc_emu_stop(m_uc);
+    }
+    for (int i = 0; i < 50 && m_workerRunningQuantum.load(); ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    m_status = EmulatorStatus::Halted;
+    m_cachedState.status = EmulatorStatus::Halted;
 }
 
 void Emulator::Step() {
     if (m_status == EmulatorStatus::Stopped || m_status == EmulatorStatus::Error) return;
+    if (m_status == EmulatorStatus::Halted) {
+        Reset();
+    }
     m_stepRequested = true;
     m_workerActive = true;
     m_status = EmulatorStatus::Stepping;
@@ -393,12 +350,18 @@ bool Emulator::LoadBinary(const uint8_t* data, size_t size, uint32_t loadAddress
         return false;
     }
 
-    // Write binary bytes directly into guest RAM
-    std::memcpy(m_ram + loadAddress, data, size);
+    // Reinitialize Unicorn completely to clear all TCG translation blocks,
+    // TLBs, CPU registers, and internal JIT cache!
+    ReinitUnicorn(m_cpuBits);
 
-    // Configure EIP
-    WriteRegister(UC_X86_REG_EIP, entryPoint);
-    RefreshStateCache();
+    // Cache the binary payload and metadata for reliable resets
+    m_loadedBinary.assign(data, data + size);
+    m_loadedLoadAddress = loadAddress;
+    m_loadedEntryPoint = entryPoint;
+    m_codeBaseAddress = loadAddress;
+    m_codeSize = static_cast<uint32_t>(size);
+
+    Reset();
     return true;
 }
 
@@ -531,6 +494,15 @@ void Emulator::WorkerThreadLoop() {
             uc_reg_read(m_uc, UC_X86_REG_EIP, &currentEip);
         }
 
+        // Runaway boundary protection: if current EIP is at or beyond the loaded code image
+        if (m_codeSize > 0 && currentEip >= m_codeBaseAddress + m_codeSize) {
+            m_workerActive = false;
+            m_status = EmulatorStatus::Halted;
+            m_cachedState.status = EmulatorStatus::Halted;
+            m_console.WriteText("[VM] Reached end of program (EIP: 0x" + std::to_string(currentEip) + "). Execution halted.\n");
+            continue;
+        }
+
         // Determine instructions to execute in this time quantum
         size_t count = 1;
         bool isStepping = m_stepRequested.exchange(false);
@@ -547,21 +519,28 @@ void Emulator::WorkerThreadLoop() {
             count = 1;
         }
 
+        m_workerRunningQuantum = true;
         uc_err err = uc_emu_start(m_uc, currentEip, m_ramSize, 0, count);
+        m_workerRunningQuantum = false;
 
         {
             std::lock_guard<std::mutex> lock(m_stateMutex);
             RefreshStateCache();
         }
 
-        if (isStepping) {
+        if (m_status == EmulatorStatus::Halted) {
+            m_workerActive = false;
+            m_cachedState.status = EmulatorStatus::Halted;
+        } else if (isStepping) {
             m_workerActive = false;
             m_status = EmulatorStatus::Paused;
             m_cachedState.status = EmulatorStatus::Paused;
         } else if (err != UC_ERR_OK) {
             m_workerActive = false;
-            m_status = EmulatorStatus::Paused;
-            m_cachedState.status = EmulatorStatus::Paused;
+            if (m_status != EmulatorStatus::Halted) {
+                m_status = EmulatorStatus::Paused;
+                m_cachedState.status = EmulatorStatus::Paused;
+            }
             if (err != UC_ERR_OK && err != UC_ERR_INSN_INVALID) {
                 m_console.WriteText("[VM] Execution stopped: " + std::string(uc_strerror(err)) + "\n");
             }
@@ -597,6 +576,31 @@ void Emulator::HookCodeCallback(uc_engine* uc, uint64_t address, uint32_t size, 
         self->m_status = EmulatorStatus::Paused;
         self->m_cachedState.status = EmulatorStatus::Paused;
         self->m_console.WriteText("[VM] Breakpoint hit at 0x" + std::to_string(addr) + "\n");
+        return;
+    }
+
+    // Runaway protection: if code executes past loaded binary into zeroed memory
+    if (self->m_codeSize > 0 && addr >= self->m_codeBaseAddress + self->m_codeSize) {
+        uint8_t op[2] = {0, 0};
+        if (self->ReadMemory(addr, op, 2) && op[0] == 0x00 && op[1] == 0x00) {
+            uc_emu_stop(uc);
+            self->m_workerActive = false;
+            self->m_status = EmulatorStatus::Halted;
+            self->m_cachedState.status = EmulatorStatus::Halted;
+            self->m_console.WriteText("[VM] Reached end of program code (uninitialized memory at 0x" + std::to_string(addr) + "). Execution halted.\n");
+            return;
+        }
+    }
+
+    // Check for HLT instruction (0xF4)
+    uint8_t op = 0;
+    if (self->ReadMemory(addr, &op, 1) && op == 0xF4) {
+        uc_emu_stop(uc);
+        self->m_workerActive = false;
+        self->m_status = EmulatorStatus::Halted;
+        self->m_cachedState.status = EmulatorStatus::Halted;
+        self->m_console.WriteText("[VM] CPU HLT instruction executed at 0x" + std::to_string(addr) + ".\n");
+        return;
     }
 }
 

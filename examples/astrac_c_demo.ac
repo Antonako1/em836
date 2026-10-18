@@ -1,0 +1,114 @@
+// =============================================================================
+// em836 Astra C Language Syscall Demo (examples/astrac_c_demo.ac)
+// Demonstrates writing high-level Astra C (.ac) code with INT 0x88 wrappers:
+//   - Functions, structs, loops, and inline `asm { ... }` blocks
+//   - Graphics rendering (SYS_GFX_SET_MODE, SYS_GFX_CLEAR, SYS_GFX_FILL_RECT,
+//     SYS_GFX_LINE, SYS_GFX_PLOT)
+//   - Console logging (SYS_PRINT_STR) & Process exit (SYS_EXIT)
+// Reference: https://antonako.net/astrac/docs/ac.php
+// =============================================================================
+
+#include "syscalls.inc"
+
+typedef struct _RECT_BOX {
+    U32 x;
+    U32 y;
+    U32 w;
+    U32 h;
+    U32 color;
+} RECT_BOX, *PRECT_BOX;
+
+VOID sys_gfx_set_mode(U32 mode) {
+    asm {
+        mov eax, SYS_GFX_SET_MODE
+        mov ebx, mode
+        int 0x88
+    }
+    return;
+}
+
+VOID sys_gfx_clear(U32 color) {
+    asm {
+        mov eax, SYS_GFX_CLEAR
+        mov ebx, color
+        int 0x88
+    }
+    return;
+}
+
+VOID sys_gfx_fill_rect(U32 x, U32 y, U32 w, U32 h, U32 color) {
+    asm {
+        mov eax, SYS_GFX_FILL_RECT
+        mov ebx, x
+        mov ecx, y
+        mov edx, w
+        mov esi, h
+        mov edi, color
+        int 0x88
+    }
+    return;
+}
+
+VOID sys_gfx_line(U32 x0, U32 y0, U32 x1, U32 y1, U32 color) {
+    asm {
+        mov eax, SYS_GFX_LINE
+        mov ebx, x0
+        mov ecx, y0
+        mov edx, x1
+        mov esi, y1
+        mov edi, color
+        int 0x88
+    }
+    return;
+}
+
+VOID sys_gfx_plot(U32 x, U32 y, U32 color) {
+    asm {
+        mov eax, SYS_GFX_PLOT
+        mov ebx, x
+        mov ecx, y
+        mov edx, color
+        int 0x88
+    }
+    return;
+}
+
+VOID sys_print_str(PU8 text) {
+    asm {
+        mov eax, SYS_PRINT_STR
+        mov ebx, text
+        mov ecx, 0
+        int 0x88
+    }
+    return;
+}
+
+VOID sys_exit(U32 code) {
+    asm {
+        mov eax, SYS_EXIT
+        mov ebx, code
+        int 0x88
+    }
+    return;
+}
+
+U32 main() {
+    sys_gfx_set_mode(VIDEO_MODE_GFX);
+    sys_gfx_clear(COLOR_BLACK);
+
+    // Draw 14 color palette bars across the screen using a C for-loop
+    for (U32 i = 1; i <= 14; i++) {
+        U32 bar_x = 30 + (i * 38);
+        U32 bar_h = 60 + (i * 20);
+        U32 bar_y = 400 - bar_h;
+        sys_gfx_fill_rect(bar_x, bar_y, 28, bar_h, i);
+    }
+
+    // Draw frame border lines around the chart
+    sys_gfx_line(40, 405, 600, 405, COLOR_WHITE);
+    sys_gfx_line(40, 80, 40, 405, COLOR_WHITE);
+
+    sys_print_str("[Astra C Demo] Compiled .ac program rendered 14 color bars!\n");
+    sys_exit(0);
+    return 0;
+}

@@ -27,21 +27,30 @@ class Emulator;
 
 /**
  * @struct AcFileHeader
- * @brief ACFH 112-byte binary header produced by AstraC executables.
+ * @brief ACFH 108-byte binary header produced by AstraC executables and libraries.
+ * @see https://antonako.net/astrac/docs/fileheader.php
  */
 #pragma pack(push, 1)
 struct AcFileHeader {
-    char magic[4];             ///< Must be "ACFH"
-    uint16_t version_major;    ///< Version major
-    uint16_t version_minor;    ///< Version minor
-    uint32_t flags;            ///< Header flags
-    uint32_t entry_point;      ///< Execution entry point address/offset
-    uint32_t code_offset;      ///< File offset of code segment
-    uint32_t code_size;        ///< Size in bytes of code segment
-    uint32_t data_offset;      ///< File offset of data segment
-    uint32_t data_size;        ///< Size in bytes of data segment
-    uint32_t bss_size;         ///< Size in bytes of uninitialized BSS
-    uint8_t reserved[76];      ///< Reserved padding up to 112 bytes
+    char magic[4];                  ///< "ACFH" magic signature
+    uint32_t version;               ///< Format version (1.0 = 0x00010000)
+    uint32_t flags;                 ///< Binary capability flags bitmask
+    uint32_t entry_point_offset;    ///< Binary-relative offset to entry point (_start / _main)
+    uint32_t code_offset;           ///< File offset to .code section
+    uint32_t data_offset;           ///< File offset to .data section
+    uint32_t rodata_offset;         ///< File offset to .rodata section
+    uint32_t bss_offset;            ///< File offset to BSS section
+    uint32_t reloc_offset;          ///< File offset to Relocation Table
+    uint32_t func_table_offset;     ///< File offset to Function Export Table
+    uint32_t import_table_offset;   ///< File offset to Import Table
+    uint32_t code_size;             ///< Size of .code section in bytes
+    uint32_t data_size;             ///< Size of .data section in bytes
+    uint32_t rodata_size;           ///< Size of .rodata section in bytes
+    uint32_t bss_size;              ///< Uninitialized BSS size in bytes (memory-only)
+    uint32_t reloc_size;            ///< Size of Relocation Table in bytes
+    uint32_t func_table_size;       ///< Size of Function Export Table section in bytes
+    uint32_t import_table_size;     ///< Size of Import Table section in bytes
+    uint8_t reserved[40];           ///< Reserved bytes (112 bytes total)
 };
 #pragma pack(pop)
 

@@ -17,6 +17,8 @@
 
 #include <iostream>
 #include <string>
+#include <filesystem>
+#include <algorithm>
 
 int main(int argc, char* argv[]) {
     // -------------------------------------------------------------------------
@@ -93,6 +95,9 @@ int main(int argc, char* argv[]) {
         std::string cliPath = argv[1];
         emulator.GetConsole().WriteText("[CLI] Loading program from command-line: " + cliPath + "\n");
         em836::AstraCToolchain::IngestFile(cliPath, emulator, config.astracPath);
+        guiState.disasmBaseAddress = emulator.GetCodeBaseAddress();
+        snprintf(guiState.disasmAddressInput, sizeof(guiState.disasmAddressInput), "%08X", guiState.disasmBaseAddress);
+        guiState.disasmFollowEip = true;
     }
 
     // -------------------------------------------------------------------------
@@ -114,7 +119,19 @@ int main(int argc, char* argv[]) {
                 if (event.drop.data) {
                     std::string droppedPath = event.drop.data;
                     emulator.GetConsole().WriteText("[Drop] Ingesting file: " + droppedPath + "\n");
-                    em836::AstraCToolchain::IngestFile(droppedPath, emulator, emulator.GetConfig().astracPath);
+
+                    std::filesystem::path p(droppedPath);
+                    std::string ext = p.extension().string();
+                    std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return std::tolower(c); });
+                    if (ext == ".as" || ext == ".asm" || ext == ".ac") {
+                        em836::GuiManager::LoadFileIntoEditor(guiState, droppedPath, &emulator);
+                    }
+
+                    if (em836::AstraCToolchain::IngestFile(droppedPath, emulator, emulator.GetConfig().astracPath)) {
+                        guiState.disasmBaseAddress = emulator.GetCpuStateSnapshot().eip;
+                        snprintf(guiState.disasmAddressInput, sizeof(guiState.disasmAddressInput), "%08X", guiState.disasmBaseAddress);
+                        guiState.disasmFollowEip = true;
+                    }
                 }
             }
 

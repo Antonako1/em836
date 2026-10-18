@@ -6,145 +6,95 @@
 #include "em836/gui.hpp"
 #include "em836/astrac.hpp"
 #include <imgui.h>
+#include <fstream>
 #include <sstream>
 #include <vector>
 
 namespace em836 {
 
 // -----------------------------------------------------------------------------
-// Sample Assembly & Astra C Demonstration Programs
+// Examples and File Management Helpers
 // -----------------------------------------------------------------------------
 
-static const char* SAMPLE_GFX_DEMO =
-"; =============================================================\n"
-"; em836 Graphics 640x480 Demo (INT 0x88 Syscall ABI)\n"
-"; Demonstrates mode setting, clear screen, rectangles, lines\n"
-"; =============================================================\n"
-"\n"
-"main:\n"
-"    ; 1. Set Video Mode to 640x480 Graphics (Mode 1)\n"
-"    mov eax, 0x40           ; SYS_GFX_SET_MODE\n"
-"    mov ebx, 1              ; Mode 1 = Graphics 640x480\n"
-"    int 0x88\n"
-"\n"
-"    ; 2. Clear Screen with Navy Blue (Color 1)\n"
-"    mov eax, 0x41           ; SYS_GFX_CLEAR\n"
-"    mov ebx, 1              ; Color 1 (Blue)\n"
-"    int 0x88\n"
-"\n"
-"    ; 3. Draw Red Header Rectangle\n"
-"    mov eax, 0x44           ; SYS_GFX_FILL_RECT\n"
-"    mov ebx, 20             ; X\n"
-"    mov ecx, 20             ; Y\n"
-"    mov edx, 600            ; Width\n"
-"    mov esi, 60             ; Height\n"
-"    mov edi, 4              ; Color 4 (Red)\n"
-"    int 0x88\n"
-"\n"
-"    ; 4. Draw Green Center Box\n"
-"    mov eax, 0x44           ; SYS_GFX_FILL_RECT\n"
-"    mov ebx, 120            ; X\n"
-"    mov ecx, 140            ; Y\n"
-"    mov edx, 400            ; Width\n"
-"    mov esi, 200            ; Height\n"
-"    mov edi, 2              ; Color 2 (Green)\n"
-"    int 0x88\n"
-"\n"
-"    ; 5. Draw Yellow Diagonal Line across box\n"
-"    mov eax, 0x43           ; SYS_GFX_LINE\n"
-"    mov ebx, 120            ; X0\n"
-"    mov ecx, 140            ; Y0\n"
-"    mov edx, 520            ; X1\n"
-"    mov esi, 340            ; Y1\n"
-"    mov edi, 14             ; Color 14 (Yellow)\n"
-"    int 0x88\n"
-"\n"
-"    ; 6. Print status message to virtual terminal\n"
-"    mov eax, 0x11           ; SYS_PRINT_STR\n"
-"    mov ebx, msg            ; Address of string\n"
-"    mov ecx, 0              ; Null-terminated\n"
-"    int 0x88\n"
-"\n"
-"    ; 7. Exit program cleanly\n"
-"    mov eax, 0x01           ; SYS_EXIT\n"
-"    mov ebx, 0              ; Exit code 0\n"
-"    int 0x88\n"
-"\n"
-"msg:\n"
-"    db \"[Guest] Graphics demo completed successfully!\", 10, 0\n";
+std::filesystem::path GuiManager::FindExamplesDirectory() {
+    std::error_code ec;
+    std::filesystem::path cur = std::filesystem::current_path(ec);
+    if (!ec) {
+        std::filesystem::path probe = cur;
+        for (int depth = 0; depth < 6; ++depth) {
+            std::filesystem::path candidate = probe / "examples";
+            if (std::filesystem::exists(candidate, ec) && std::filesystem::is_directory(candidate, ec)) {
+                return std::filesystem::weakly_canonical(std::filesystem::absolute(candidate, ec), ec);
+            }
+            if (!probe.has_parent_path() || probe.parent_path() == probe) {
+                break;
+            }
+            probe = probe.parent_path();
+        }
+    }
+    return std::filesystem::path("examples");
+}
 
-static const char* SAMPLE_VGA_TEXT_DEMO =
-"; =============================================================\n"
-"; em836 VGA Text Mode Demo (0xB8000 Direct Memory Writes)\n"
-"; Writes colored characters directly to the 80x25 text buffer\n"
-"; =============================================================\n"
-"\n"
-"main:\n"
-"    ; Ensure Text Mode (80x25)\n"
-"    mov eax, 0x40           ; SYS_GFX_SET_MODE\n"
-"    mov ebx, 0              ; Mode 0 = Text 80x25\n"
-"    int 0x88\n"
-"\n"
-"    mov edi, 0x000B8000     ; Base address of VGA Text buffer\n"
-"\n"
-"    ; Write 'H' (0x48) with Yellow on Blue attribute (0x1E)\n"
-"    mov byte [edi], 0x48\n"
-"    mov byte [edi + 1], 0x1E\n"
-"\n"
-"    ; Write 'E' (0x45)\n"
-"    mov byte [edi + 2], 0x45\n"
-"    mov byte [edi + 3], 0x1E\n"
-"\n"
-"    ; Write 'L' (0x4C)\n"
-"    mov byte [edi + 4], 0x4C\n"
-"    mov byte [edi + 5], 0x1E\n"
-"\n"
-"    ; Write 'L' (0x4C)\n"
-"    mov byte [edi + 6], 0x4C\n"
-"    mov byte [edi + 7], 0x1E\n"
-"\n"
-"    ; Write 'O' (0x4F)\n"
-"    mov byte [edi + 8], 0x4F\n"
-"    mov byte [edi + 9], 0x1E\n"
-"\n"
-"    ; Exit\n"
-"    mov eax, 0x01           ; SYS_EXIT\n"
-"    mov ebx, 0\n"
-"    int 0x88\n";
+bool GuiManager::LoadFileIntoEditor(GuiState& state, const std::string& filePath, Emulator* emu) {
+    std::error_code ec;
+    std::filesystem::path absPath = std::filesystem::weakly_canonical(std::filesystem::absolute(filePath, ec), ec);
+    std::string resolvedPath = ec ? filePath : absPath.string();
 
-static const char* SAMPLE_COM1_DEMO =
-"; =============================================================\n"
-"; em836 COM1 Serial Port I/O Demo\n"
-"; Writes characters to UART Data Port (0x03F8)\n"
-"; =============================================================\n"
-"\n"
-"main:\n"
-"    mov dx, 0x03F8          ; COM1 UART Port\n"
-"    mov al, 0x48            ; 'H'\n"
-"    out dx, al\n"
-"    mov al, 0x65            ; 'e'\n"
-"    out dx, al\n"
-"    mov al, 0x6C            ; 'l'\n"
-"    out dx, al\n"
-"    mov al, 0x6C            ; 'l'\n"
-"    out dx, al\n"
-"    mov al, 0x6F            ; 'o'\n"
-"    out dx, al\n"
-"    mov al, 0x21            ; '!'\n"
-"    out dx, al\n"
-"    mov al, 0x0A            ; Newline\n"
-"    out dx, al\n"
-"\n"
-"    mov eax, 0x01           ; SYS_EXIT\n"
-"    mov ebx, 0\n"
-"    int 0x88\n";
+    std::ifstream file(resolvedPath);
+    if (!file.is_open()) {
+        if (emu) emu->GetConsole().WriteText("[Editor Error] Failed to open: " + resolvedPath + "\n");
+        return false;
+    }
+
+    std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+    state.editorText = content;
+    state.editorFilePath = resolvedPath;
+    state.editorModified = false;
+
+    std::filesystem::path p(resolvedPath);
+    std::string ext = p.extension().string();
+    std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return std::tolower(c); });
+    state.editorLanguage = (ext == ".ac") ? 1 : 0;
+
+    if (emu) emu->GetConsole().WriteText("[Editor] Loaded: " + resolvedPath + "\n");
+    return true;
+}
+
+bool GuiManager::SaveEditorToFile(GuiState& state, const std::string& filePath, Emulator* emu) {
+    std::error_code ec;
+    std::filesystem::path absPath = std::filesystem::weakly_canonical(std::filesystem::absolute(filePath, ec), ec);
+    std::string resolvedPath = ec ? filePath : absPath.string();
+
+    std::ofstream file(resolvedPath);
+    if (!file.is_open()) {
+        if (emu) emu->GetConsole().WriteText("[Editor Error] Failed to save to: " + resolvedPath + "\n");
+        return false;
+    }
+
+    file << state.editorText;
+    state.editorFilePath = resolvedPath;
+    state.editorModified = false;
+    if (emu) emu->GetConsole().WriteText("[Editor] Saved changes to: " + resolvedPath + "\n");
+    return true;
+}
 
 static void ExecuteCompileAndRun(Emulator& emu, GuiState& state, bool runAfterCompile) {
     bool isAstraC = (state.editorLanguage == 1);
     std::string toolName = isAstraC ? "Astra C Compiler" : "AstraC Assembler";
 
+    // If an example or source file is active on disk, save editor buffer directly to it
+    if (!state.editorFilePath.empty()) {
+        GuiManager::SaveEditorToFile(state, state.editorFilePath, &emu);
+    }
+
     emu.GetConsole().AppendBuildLog("[Build] Invoking " + toolName + "...\n");
-    CompilationResult res = AstraCToolchain::CompileBuffer(state.editorText, isAstraC, emu.GetConfig().astracPath);
+
+    CompilationResult res;
+    if (!state.editorFilePath.empty()) {
+        res = AstraCToolchain::CompileFile(state.editorFilePath, emu.GetConfig().astracPath);
+    } else {
+        res = AstraCToolchain::CompileBuffer(state.editorText, isAstraC, emu.GetConfig().astracPath);
+    }
 
     emu.GetConsole().AppendBuildLog(res.outputLog + "\n");
 
@@ -156,6 +106,10 @@ static void ExecuteCompileAndRun(Emulator& emu, GuiState& state, bool runAfterCo
     emu.GetConsole().AppendBuildLog("[Build Success] Output binary: " + res.binaryPath + "\n");
 
     AstraCToolchain::IngestFile(res.binaryPath, emu, emu.GetConfig().astracPath);
+    state.disasmBaseAddress = emu.GetCodeBaseAddress();
+    snprintf(state.disasmAddressInput, sizeof(state.disasmAddressInput), "%08X", state.disasmBaseAddress);
+    state.disasmFollowEip = true;
+
     if (runAfterCompile) {
         emu.Start();
     }
@@ -167,7 +121,7 @@ void GuiManager::RenderEditorWindow(Emulator& emu, GuiState& state) {
     if (ImGui::Begin("Code Editor", &state.showEditor)) {
         // Toolbar controls
         const char* langItems[] = { "Assembly (.as)", "Astra C (.ac)" };
-        ImGui::SetNextItemWidth(140);
+        ImGui::SetNextItemWidth(130);
         ImGui::Combo("##editor_lang", &state.editorLanguage, langItems, IM_ARRAYSIZE(langItems));
 
         ImGui::SameLine();
@@ -183,24 +137,64 @@ void GuiManager::RenderEditorWindow(Emulator& emu, GuiState& state) {
         }
 
         ImGui::SameLine();
-        if (ImGui::Button("Load Sample Code")) {
-            ImGui::OpenPopup("sample_templates_popup");
+        if (ImGui::Button(" Examples... ")) {
+            ImGui::OpenPopup("examples_popup");
         }
 
-        if (ImGui::BeginPopup("sample_templates_popup")) {
-            if (ImGui::MenuItem("VGA 640x480 Graphics Demo (INT 0x88)")) {
-                state.editorText = SAMPLE_GFX_DEMO;
-                state.editorLanguage = 0;
+        if (ImGui::BeginPopup("examples_popup")) {
+            std::filesystem::path examplesDir = FindExamplesDirectory();
+            bool foundAny = false;
+            if (std::filesystem::exists(examplesDir) && std::filesystem::is_directory(examplesDir)) {
+                for (const auto& entry : std::filesystem::directory_iterator(examplesDir)) {
+                    if (!entry.is_regular_file()) continue;
+                    std::string ext = entry.path().extension().string();
+                    std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return std::tolower(c); });
+                    if (ext == ".as" || ext == ".asm" || ext == ".ac") {
+                        // Skip compiler-generated .AS intermediate files when a matching .ac source file exists
+                        if (ext == ".as") {
+                            std::filesystem::path matchingAc = entry.path().parent_path() / (entry.path().stem().string() + ".ac");
+                            if (std::filesystem::exists(matchingAc)) {
+                                continue;
+                            }
+                        }
+                        std::string fname = entry.path().filename().string();
+                        if (ImGui::MenuItem(fname.c_str())) {
+                            LoadFileIntoEditor(state, entry.path().string(), &emu);
+                        }
+                        foundAny = true;
+                    }
+                }
             }
-            if (ImGui::MenuItem("VGA Text Mode Demo (0xB8000)")) {
-                state.editorText = SAMPLE_VGA_TEXT_DEMO;
-                state.editorLanguage = 0;
-            }
-            if (ImGui::MenuItem("COM1 Serial Port Demo (0x03F8)")) {
-                state.editorText = SAMPLE_COM1_DEMO;
-                state.editorLanguage = 0;
+            if (!foundAny) {
+                ImGui::TextDisabled("No example files found in examples/");
             }
             ImGui::EndPopup();
+        }
+
+        ImGui::SameLine();
+        if (ImGui::Button(" Save ")) {
+            if (!state.editorFilePath.empty()) {
+                SaveEditorToFile(state, state.editorFilePath, &emu);
+            } else {
+                std::filesystem::path scratchPath = FindExamplesDirectory() / "scratch.as";
+                SaveEditorToFile(state, scratchPath.string(), &emu);
+            }
+        }
+
+        ImGui::SameLine();
+        if (ImGui::Button(" Reload ")) {
+            if (!state.editorFilePath.empty()) {
+                LoadFileIntoEditor(state, state.editorFilePath, &emu);
+            }
+        }
+
+        ImGui::SameLine();
+        std::string displayFile = state.editorFilePath.empty()
+            ? "Unsaved Buffer"
+            : std::filesystem::path(state.editorFilePath).filename().string();
+        ImGui::TextDisabled("[%s%s]", displayFile.c_str(), state.editorModified ? " *" : "");
+        if (!state.editorFilePath.empty() && ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("%s", state.editorFilePath.c_str());
         }
 
         ImGui::Separator();

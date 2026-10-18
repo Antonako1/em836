@@ -7,6 +7,8 @@
 #include "em836/astrac.hpp"
 #include <imgui.h>
 #include <cstring>
+#include <filesystem>
+#include <algorithm>
 
 namespace em836 {
 
@@ -107,6 +109,9 @@ void GuiManager::RenderLoadOptionsModal(Emulator& emu, GuiState& state) {
 
             if (!state.pendingLoadFilePath.empty()) {
                 AstraCToolchain::IngestFile(state.pendingLoadFilePath, emu, emu.GetConfig().astracPath);
+                state.disasmBaseAddress = emu.GetCodeBaseAddress();
+                snprintf(state.disasmAddressInput, sizeof(state.disasmAddressInput), "%08X", state.disasmBaseAddress);
+                state.disasmFollowEip = true;
             }
 
             CpuState cpu = emu.GetCpuStateSnapshot();
@@ -147,7 +152,17 @@ void GuiManager::RenderFileOpenModal(Emulator& emu, GuiState& state) {
         if (ImGui::Button("Open & Run", ImVec2(120, 0))) {
             std::string path(state.fileOpenPathInput);
             if (!path.empty()) {
+                std::filesystem::path p(path);
+                std::string ext = p.extension().string();
+                std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return std::tolower(c); });
+                if (ext == ".as" || ext == ".asm" || ext == ".ac") {
+                    GuiManager::LoadFileIntoEditor(state, path, &emu);
+                }
+
                 AstraCToolchain::IngestFile(path, emu, emu.GetConfig().astracPath);
+                state.disasmBaseAddress = emu.GetCodeBaseAddress();
+                snprintf(state.disasmAddressInput, sizeof(state.disasmAddressInput), "%08X", state.disasmBaseAddress);
+                state.disasmFollowEip = true;
                 emu.Start();
             }
             state.showFileOpenModal = false;
