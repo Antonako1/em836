@@ -35,14 +35,33 @@ void GuiManager::RenderExecutionWindow(Emulator& emu, GuiState& state) {
 
         ImGui::SameLine();
         ImGui::BeginDisabled(isRunning);
-        if (ImGui::Button("  Step  ", ImVec2(70, 30))) {
-            emu.Step();
+        if (ImGui::Button(" Step In ", ImVec2(65, 30))) {
+            emu.StepInto();
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Step Into next instruction (F11)");
+        }
+
+        ImGui::SameLine();
+        if (ImGui::Button(" Step Over ", ImVec2(75, 30))) {
+            emu.StepOver();
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Step Over subroutine/call (F10)");
+        }
+
+        ImGui::SameLine();
+        if (ImGui::Button(" Step Out ", ImVec2(70, 30))) {
+            emu.StepOut();
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Step Out to return address in caller (Shift+F11)");
         }
         ImGui::EndDisabled();
 
         ImGui::SameLine();
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.7f, 0.2f, 0.2f, 1.0f));
-        if (ImGui::Button(" Reset ", ImVec2(70, 30))) {
+        if (ImGui::Button(" Reset ", ImVec2(60, 30))) {
             emu.Reset();
         }
         ImGui::PopStyleColor();

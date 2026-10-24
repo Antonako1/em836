@@ -136,24 +136,42 @@ int main(int argc, char* argv[]) {
             }
 
             // Global Keyboard Shortcuts
-            if (event.type == SDL_EVENT_KEY_DOWN && !io.WantCaptureKeyboard) {
-                if (event.key.key == SDLK_F5) {
-                    // Toggle Run / Pause
-                    em836::CpuState state = emulator.GetCpuStateSnapshot();
-                    if (state.status == em836::EmulatorStatus::Running) {
-                        emulator.Pause();
-                    } else {
-                        emulator.Start();
+            if (event.type == SDL_EVENT_KEY_DOWN) {
+                if (event.key.mod & SDL_KMOD_CTRL) {
+                    if (event.key.key == SDLK_N) {
+                        em836::GuiManager::CreateNewEditorTab(guiState, guiState.editorLanguage);
+                    } else if (event.key.key == SDLK_W) {
+                        em836::GuiManager::CloseEditorTab(guiState, guiState.activeEditorTabIndex);
+                    } else if (event.key.key == SDLK_S) {
+                        em836::GuiManager::SaveEditorTabToFile(guiState, guiState.activeEditorTabIndex, "", &emulator);
                     }
-                } else if (event.key.key == SDLK_F10) {
-                    // Single Step
-                    emulator.Step();
-                } else if (event.key.key == SDLK_R && (event.key.mod & SDL_KMOD_CTRL)) {
-                    // Reset
-                    emulator.Reset();
-                } else if (event.key.key == SDLK_L && (event.key.mod & SDL_KMOD_CTRL) && (event.key.mod & SDL_KMOD_SHIFT)) {
-                    // Reset Default GUI Layout
-                    guiState.requestLayoutReset = true;
+                }
+
+                if (!io.WantCaptureKeyboard) {
+                    if (event.key.key == SDLK_F5) {
+                        // Toggle Run / Pause
+                        em836::CpuState state = emulator.GetCpuStateSnapshot();
+                        if (state.status == em836::EmulatorStatus::Running) {
+                            emulator.Pause();
+                        } else {
+                            emulator.Start();
+                        }
+                    } else if (event.key.key == SDLK_F11 && (event.key.mod & SDL_KMOD_SHIFT)) {
+                        // Step Out
+                        emulator.StepOut();
+                    } else if (event.key.key == SDLK_F11) {
+                        // Step Into
+                        emulator.StepInto();
+                    } else if (event.key.key == SDLK_F10) {
+                        // Step Over
+                        emulator.StepOver();
+                    } else if (event.key.key == SDLK_R && (event.key.mod & SDL_KMOD_CTRL)) {
+                        // Reset
+                        emulator.Reset();
+                    } else if (event.key.key == SDLK_L && (event.key.mod & SDL_KMOD_CTRL) && (event.key.mod & SDL_KMOD_SHIFT)) {
+                        // Reset Default GUI Layout
+                        guiState.requestLayoutReset = true;
+                    }
                 }
             }
         }

@@ -128,6 +128,7 @@ add_executable(em836
     src/gui/gui_console.cpp
     src/gui/gui_editor.cpp
     src/gui/gui_modals.cpp
+    src/gui/syntax.cpp
 
     # Dear ImGui core
     "${IMGUI_ROOT}/imgui.cpp"

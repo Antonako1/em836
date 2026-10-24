@@ -30,6 +30,38 @@ struct SDL_Renderer;
 namespace em836 {
 
 /**
+ * @struct EditorTab
+ * @brief Represents an open file or document buffer in the in-GUI code editor.
+ */
+struct EditorTab {
+    int id = 0;                     ///< Unique tab identifier
+    std::string title;              ///< Tab display label (e.g. "untitled-1.as" or "demo.ac")
+    std::string filePath;           ///< Path to file on disk (or empty if unsaved)
+    std::string text;               ///< Buffer contents
+    bool modified = false;          ///< True if text has changed since last save/load
+    int language = 0;               ///< 0 = Assembly (.as), 1 = Astra C (.ac)
+    int targetFormat = 0;           ///< 0 = Raw .bin, 1 = ACFH .exe, 2 = ACFH .lib
+    bool acfhOptOffsetTable = true;
+    bool acfhOptFuncTable = true;
+    bool acfhOptImportTable = true;
+    int viewMode = 0;               ///< 0 = Edit, 1 = Highlighted, 2 = Split View
+};
+
+/**
+ * @struct DsmModuleView
+ * @brief Represents disassembly listing and symbols for an executable or dynamic library module.
+ */
+struct DsmModuleView {
+    std::string moduleName;         ///< Display name (e.g. "exe_import_demo.exe", "math_lib.lib")
+    std::string filePath;           ///< Path to binary or .DSM file
+    bool isLibrary = false;         ///< True if module is a dynamic library (.lib)
+    uint32_t baseAddress = 0;       ///< Runtime base address (0x0 for exe, 0x00100000+ for libs)
+    uint32_t codeOffset = 0;        ///< Offset to .code section in binary (e.g. 0x70)
+    uint32_t codeSize = 0;          ///< Size of .code section in bytes
+    std::vector<std::string> lines; ///< Disassembled text lines
+};
+
+/**
  * @struct GuiState
  * @brief Encapsulates transient UI widget state, open dialog flags, and editor text buffers.
  */
@@ -42,6 +74,7 @@ struct GuiState {
     bool showVga = true;
     bool showConsole = true;
     bool showEditor = true;
+    bool showBreakpoints = true;
 
     // Dialog & Modal flags
     bool showSettingsModal = false;
@@ -58,6 +91,8 @@ struct GuiState {
     int disasmActiveTab = 0; ///< 0 = Live RAM (Capstone), 1 = AstraC Annotated (.DSM)
 
     // AstraC Disassembler (.DSM) State
+    std::vector<DsmModuleView> dsmModules;
+    int selectedDsmModuleIndex = 0;
     std::string dsmLoadedPath = "";
     std::string dsmContent = "";
     std::vector<std::string> dsmLines;
@@ -78,6 +113,9 @@ struct GuiState {
     int historyIndex = -1;
 
     // Code Editor state
+    std::vector<EditorTab> editorTabs;
+    int activeEditorTabIndex = 0;
+    int nextUntitledId = 1;
     std::string editorText;
     int editorLanguage = 0; ///< 0 = Assembly (.as), 1 = Astra C (.ac)
     int editorTargetFormat = 0; ///< 0 = Raw .bin, 1 = ACFH .exe, 2 = ACFH .lib
@@ -114,6 +152,22 @@ public:
     static bool LoadDsmForFile(GuiState& state, const std::string& filePath, const std::string& customAstraCPath = "");
 
     /**
+     * @brief Refreshes disassembly listings for the main executable and all loaded dynamic libraries.
+     * @param emu Emulator instance containing loaded modules and library references.
+     * @param state GuiState reference where dsmModules will be updated.
+     */
+    static void RefreshDsmModules(Emulator& emu, GuiState& state);
+
+    /**
+     * @brief Selects a module and scrolls to a given exported or local function symbol.
+     * @param state GuiState reference.
+     * @param moduleName Name of the target module (or empty to search across all).
+     * @param symbolName Function symbol to locate.
+     * @return True if located and selected, false otherwise.
+     */
+    static bool JumpToDsmSymbol(GuiState& state, const std::string& moduleName, const std::string& symbolName);
+
+    /**
      * @brief Initializes default sample code and styles for the GUI.
      * @param state GuiState reference to initialize.
      */
@@ -133,6 +187,40 @@ public:
      * @return True if loaded successfully, false otherwise.
      */
     static bool LoadFileIntoEditor(GuiState& state, const std::string& filePath, Emulator* emu = nullptr);
+
+    /**
+     * @brief Creates a new editor tab.
+     * @param state GuiState reference.
+     * @param language 0 = Assembly (.as), 1 = Astra C (.ac).
+     * @return Index of the newly created tab.
+     */
+    static int CreateNewEditorTab(GuiState& state, int language = 0);
+
+    /**
+     * @brief Closes an editor tab by index.
+     * @param state GuiState reference.
+     * @param tabIndex Index of the tab to close.
+     */
+    static void CloseEditorTab(GuiState& state, int tabIndex);
+
+    /**
+     * @brief Finds an already opened tab for filePath or opens it into a new tab.
+     * @param state GuiState reference.
+     * @param filePath File path on disk.
+     * @param emu Optional Emulator pointer for logging.
+     * @return Tab index if opened, -1 on failure.
+     */
+    static int FindOrOpenEditorTab(GuiState& state, const std::string& filePath, Emulator* emu = nullptr);
+
+    /**
+     * @brief Saves the specified editor tab to disk.
+     * @param state GuiState reference.
+     * @param tabIndex Index of the tab to save (-1 for active tab).
+     * @param filePath Target file path (or empty to use tab.filePath).
+     * @param emu Optional Emulator pointer for console logging.
+     * @return True if saved successfully, false otherwise.
+     */
+    static bool SaveEditorTabToFile(GuiState& state, int tabIndex = -1, const std::string& filePath = "", Emulator* emu = nullptr);
 
     /**
      * @brief Saves the current editor text buffer to disk.
@@ -156,6 +244,7 @@ public:
     static void RenderRegistersWindow(Emulator& emu, GuiState& state);
     static void RenderExecutionWindow(Emulator& emu, GuiState& state);
     static void RenderDisassemblyWindow(Emulator& emu, GuiState& state);
+    static void RenderBreakpointsAndWatchesWindow(Emulator& emu, GuiState& state);
     static void RenderMemoryWindow(Emulator& emu, GuiState& state);
     static void RenderMemoryContent(Emulator& emu, GuiState& state);
     static void RenderVgaWindow(Emulator& emu, GuiState& state, SDL_Renderer* renderer);

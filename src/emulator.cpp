@@ -162,6 +162,9 @@ bool Emulator::ReinitUnicorn(uint32_t bits) {
     uc_hook_add(m_uc, &m_portInHook, UC_HOOK_INSN, reinterpret_cast<void*>(HookPortInCallback), this, 1, 0, UC_X86_INS_IN);
     uc_hook_add(m_uc, &m_portOutHook, UC_HOOK_INSN, reinterpret_cast<void*>(HookPortOutCallback), this, 1, 0, UC_X86_INS_OUT);
 
+    // Register memory write hook for watchpoints (data breakpoints)
+    uc_hook_add(m_uc, &m_memWriteHook, UC_HOOK_MEM_WRITE, reinterpret_cast<void*>(HookMemWriteCallback), this, 1, 0);
+
     return true;
 }
 
@@ -179,6 +182,13 @@ void Emulator::Reset() {
     m_status = EmulatorStatus::Paused;
     m_cachedState.status = EmulatorStatus::Paused;
     m_cachedState.lastErrorMessage.clear();
+
+    m_stepOverActive = false;
+    m_stepOverTarget = 0;
+    m_stepOverInitialEsp = 0;
+    m_stepOutActive = false;
+    m_stepOutHitRet = false;
+    m_stepOutInitialEsp = 0;
 
     // Zero out physical RAM
     if (m_ram) {
@@ -252,10 +262,18 @@ void Emulator::Start() {
     }
     m_workerActive = true;
     m_status = EmulatorStatus::Running;
+    {
+        std::lock_guard<std::mutex> lock(m_stateMutex);
+        m_cachedState.status = EmulatorStatus::Running;
+    }
 }
 
 void Emulator::Pause() {
     m_workerActive = false;
+    m_stepOverActive = false;
+    m_stepOverTarget = 0;
+    m_stepOutActive = false;
+    m_stepOutHitRet = false;
     if (m_uc) {
         uc_emu_stop(m_uc);
     }
@@ -268,6 +286,10 @@ void Emulator::Pause() {
 
 void Emulator::Halt() {
     m_workerActive = false;
+    m_stepOverActive = false;
+    m_stepOverTarget = 0;
+    m_stepOutActive = false;
+    m_stepOutHitRet = false;
     if (m_uc) {
         uc_emu_stop(m_uc);
     }
@@ -283,9 +305,96 @@ void Emulator::Step() {
     if (m_status == EmulatorStatus::Halted) {
         Reset();
     }
+    m_stepOverActive = false;
+    m_stepOverTarget = 0;
+    m_stepOutActive = false;
+    m_stepOutHitRet = false;
     m_stepRequested = true;
     m_workerActive = true;
     m_status = EmulatorStatus::Stepping;
+    {
+        std::lock_guard<std::mutex> lock(m_stateMutex);
+        m_cachedState.status = EmulatorStatus::Stepping;
+    }
+}
+
+void Emulator::StepInto() {
+    Step();
+}
+
+void Emulator::StepOver() {
+    if (m_status == EmulatorStatus::Stopped || m_status == EmulatorStatus::Error) return;
+    if (m_status == EmulatorStatus::Halted) {
+        Reset();
+    }
+
+    uint32_t currentEip = 0;
+    uint32_t currentEsp = 0;
+    {
+        std::lock_guard<std::mutex> lock(m_stateMutex);
+        if (!m_uc) return;
+        uc_reg_read(m_uc, UC_X86_REG_EIP, &currentEip);
+        uc_reg_read(m_uc, UC_X86_REG_ESP, &currentEsp);
+    }
+
+    // Inspect instruction at current EIP using Capstone
+    bool isCall = false;
+    uint32_t insnSize = 0;
+
+    if (m_capstone && m_ram && currentEip < m_ramSize) {
+        size_t avail = std::min(m_ramSize - currentEip, static_cast<size_t>(16));
+        cs_insn* insn = nullptr;
+        size_t count = cs_disasm(m_capstone, m_ram + currentEip, avail, currentEip, 1, &insn);
+        if (count > 0 && insn) {
+            insnSize = static_cast<uint32_t>(insn[0].size);
+            if (insn[0].id == X86_INS_CALL || insn[0].id == X86_INS_LCALL) {
+                isCall = true;
+            }
+            cs_free(insn, count);
+        }
+    }
+
+    if (isCall && insnSize > 0) {
+        m_stepOverTarget = currentEip + insnSize;
+        m_stepOverInitialEsp = currentEsp;
+        m_stepOverActive = true;
+        m_stepOutActive = false;
+        m_stepOutHitRet = false;
+        m_workerActive = true;
+        m_status = EmulatorStatus::Running;
+        {
+            std::lock_guard<std::mutex> lock(m_stateMutex);
+            m_cachedState.status = EmulatorStatus::Running;
+        }
+    } else {
+        Step();
+    }
+}
+
+void Emulator::StepOut() {
+    if (m_status == EmulatorStatus::Stopped || m_status == EmulatorStatus::Error) return;
+    if (m_status == EmulatorStatus::Halted) {
+        Reset();
+    }
+
+    uint32_t currentEsp = 0;
+    {
+        std::lock_guard<std::mutex> lock(m_stateMutex);
+        if (!m_uc) return;
+        uc_reg_read(m_uc, UC_X86_REG_ESP, &currentEsp);
+    }
+
+    m_stepOverActive = false;
+    m_stepOverTarget = 0;
+    m_stepOutInitialEsp = currentEsp;
+    m_stepOutHitRet = false;
+    m_stepOutActive = true;
+    m_workerActive = true;
+    m_status = EmulatorStatus::Running;
+    {
+        std::lock_guard<std::mutex> lock(m_stateMutex);
+        m_cachedState.status = EmulatorStatus::Running;
+    }
 }
 
 void Emulator::SetClockSpeed(uint32_t hz) {
@@ -321,16 +430,32 @@ uint32_t Emulator::GetCpuMode() const {
 
 void Emulator::ToggleBreakpoint(uint32_t address) {
     std::lock_guard<std::mutex> lock(m_stateMutex);
-    if (m_breakpoints.count(address)) {
-        m_breakpoints.erase(address);
+    auto it = m_breakpoints.find(address);
+    if (it != m_breakpoints.end()) {
+        it->second.enabled = !it->second.enabled;
     } else {
-        m_breakpoints.insert(address);
+        BreakpointItem bp;
+        bp.address = address;
+        bp.enabled = true;
+        bp.hitCount = 0;
+        m_breakpoints[address] = bp;
     }
 }
 
-void Emulator::AddBreakpoint(uint32_t address) {
+void Emulator::AddBreakpoint(uint32_t address, const std::string& symbol) {
     std::lock_guard<std::mutex> lock(m_stateMutex);
-    m_breakpoints.insert(address);
+    auto& bp = m_breakpoints[address];
+    bp.address = address;
+    bp.enabled = true;
+    if (!symbol.empty()) bp.symbol = symbol;
+}
+
+void Emulator::SetBreakpointEnabled(uint32_t address, bool enabled) {
+    std::lock_guard<std::mutex> lock(m_stateMutex);
+    auto it = m_breakpoints.find(address);
+    if (it != m_breakpoints.end()) {
+        it->second.enabled = enabled;
+    }
 }
 
 void Emulator::RemoveBreakpoint(uint32_t address) {
@@ -345,7 +470,84 @@ void Emulator::ClearBreakpoints() {
 
 bool Emulator::HasBreakpoint(uint32_t address) const {
     std::lock_guard<std::mutex> lock(m_stateMutex);
-    return m_breakpoints.count(address) > 0;
+    auto it = m_breakpoints.find(address);
+    return (it != m_breakpoints.end() && it->second.enabled);
+}
+
+std::vector<BreakpointItem> Emulator::GetBreakpointsList() const {
+    std::lock_guard<std::mutex> lock(m_stateMutex);
+    std::vector<BreakpointItem> list;
+    list.reserve(m_breakpoints.size());
+    for (const auto& kv : m_breakpoints) {
+        list.push_back(kv.second);
+    }
+    std::sort(list.begin(), list.end(), [](const BreakpointItem& a, const BreakpointItem& b) {
+        return a.address < b.address;
+    });
+    return list;
+}
+
+uint32_t Emulator::AddWatchpoint(uint32_t address, uint32_t size, WatchCondition cond, uint32_t targetVal, const std::string& name) {
+    std::lock_guard<std::mutex> lock(m_stateMutex);
+    WatchpointItem wp;
+    wp.id = m_nextWatchpointId++;
+    wp.address = address;
+    wp.size = (size == 1 || size == 2 || size == 4) ? size : 4;
+    wp.condition = cond;
+    wp.targetValue = targetVal;
+    wp.name = name;
+    wp.enabled = true;
+    wp.hitCount = 0;
+
+    uint32_t val = 0;
+    if (m_ram && address + wp.size <= m_ramSize) {
+        std::memcpy(&val, m_ram + address, wp.size);
+    }
+    wp.currentValue = val;
+    wp.previousValue = val;
+
+    m_watchpoints.push_back(wp);
+    return wp.id;
+}
+
+void Emulator::SetWatchpointEnabled(uint32_t id, bool enabled) {
+    std::lock_guard<std::mutex> lock(m_stateMutex);
+    for (auto& wp : m_watchpoints) {
+        if (wp.id == id) {
+            wp.enabled = enabled;
+            break;
+        }
+    }
+}
+
+void Emulator::RemoveWatchpoint(uint32_t id) {
+    std::lock_guard<std::mutex> lock(m_stateMutex);
+    for (auto it = m_watchpoints.begin(); it != m_watchpoints.end(); ++it) {
+        if (it->id == id) {
+            m_watchpoints.erase(it);
+            break;
+        }
+    }
+}
+
+void Emulator::ClearWatchpoints() {
+    std::lock_guard<std::mutex> lock(m_stateMutex);
+    m_watchpoints.clear();
+}
+
+std::vector<WatchpointItem> Emulator::GetWatchpointsList() const {
+    std::lock_guard<std::mutex> lock(m_stateMutex);
+    auto list = m_watchpoints;
+    if (m_ram) {
+        for (auto& wp : list) {
+            if (wp.address + wp.size <= m_ramSize) {
+                uint32_t val = 0;
+                std::memcpy(&val, m_ram + wp.address, wp.size);
+                wp.currentValue = val;
+            }
+        }
+    }
+    return list;
 }
 
 bool Emulator::LoadBinary(const uint8_t* data, size_t size, uint32_t loadAddress, uint32_t entryPoint) {
@@ -577,14 +779,64 @@ void Emulator::HookCodeCallback(uc_engine* uc, uint64_t address, uint32_t size, 
 
     self->m_cachedState.instructionCount++;
 
+    // Step Out: Check if RET was hit on the preceding instruction (we are now at caller return address)
+    if (self->m_stepOutActive && self->m_stepOutHitRet) {
+        self->m_stepOutActive = false;
+        self->m_stepOutHitRet = false;
+        uc_emu_stop(uc);
+        self->m_workerActive = false;
+        self->m_status = EmulatorStatus::Paused;
+        self->m_cachedState.status = EmulatorStatus::Paused;
+        return;
+    }
+
+    // Step Over: Check if target return address reached
+    if (self->m_stepOverActive && addr == self->m_stepOverTarget) {
+        uint32_t currentEsp = 0;
+        uc_reg_read(uc, UC_X86_REG_ESP, &currentEsp);
+        if (currentEsp >= self->m_stepOverInitialEsp) {
+            self->m_stepOverActive = false;
+            self->m_stepOverTarget = 0;
+            uc_emu_stop(uc);
+            self->m_workerActive = false;
+            self->m_status = EmulatorStatus::Paused;
+            self->m_cachedState.status = EmulatorStatus::Paused;
+            return;
+        }
+    }
+
     // Check if breakpoint is hit
     if (self->HasBreakpoint(addr)) {
+        self->m_stepOverActive = false;
+        self->m_stepOutActive = false;
+        self->m_stepOutHitRet = false;
+        {
+            std::lock_guard<std::mutex> lock(self->m_stateMutex);
+            auto it = self->m_breakpoints.find(addr);
+            if (it != self->m_breakpoints.end()) {
+                it->second.hitCount++;
+            }
+        }
         uc_emu_stop(uc);
         self->m_workerActive = false;
         self->m_status = EmulatorStatus::Paused;
         self->m_cachedState.status = EmulatorStatus::Paused;
         self->m_console.WriteText("[VM] Breakpoint hit at 0x" + std::to_string(addr) + "\n");
         return;
+    }
+
+    // Step Out: Check if current instruction is RET
+    if (self->m_stepOutActive) {
+        uint8_t op = 0;
+        if (self->ReadMemory(addr, &op, 1)) {
+            if (op == 0xC3 || op == 0xC2 || op == 0xCB || op == 0xCA || op == 0xCF) {
+                uint32_t currentEsp = 0;
+                uc_reg_read(uc, UC_X86_REG_ESP, &currentEsp);
+                if (currentEsp >= self->m_stepOutInitialEsp) {
+                    self->m_stepOutHitRet = true;
+                }
+            }
+        }
     }
 
     // Runaway protection: if code executes outside loaded binaries into uninitialized memory
@@ -627,6 +879,75 @@ uint32_t Emulator::HookPortInCallback(uc_engine* uc, uint32_t port, int size, vo
 void Emulator::HookPortOutCallback(uc_engine* uc, uint32_t port, int size, uint32_t value, void* user_data) {
     Emulator* self = static_cast<Emulator*>(user_data);
     self->m_syscalls.HandlePortIO(*self, port, static_cast<uint32_t>(size), &value, true);
+}
+
+void Emulator::HookMemWriteCallback(uc_engine* uc, uc_mem_type type, uint64_t address, int size, int64_t value, void* user_data) {
+    Emulator* self = static_cast<Emulator*>(user_data);
+    uint32_t writeAddr = static_cast<uint32_t>(address);
+    uint32_t writeSize = static_cast<uint32_t>(size);
+
+    std::lock_guard<std::mutex> lock(self->m_stateMutex);
+    if (!self->m_ram) return;
+
+    bool triggered = false;
+    std::string hitMsg;
+
+    for (auto& wp : self->m_watchpoints) {
+        if (!wp.enabled) continue;
+
+        // Check if write overlaps [wp.address, wp.address + wp.size)
+        if (writeAddr < wp.address + wp.size && writeAddr + writeSize > wp.address) {
+            uint32_t oldVal = 0;
+            if (wp.address + wp.size <= self->m_ramSize) {
+                std::memcpy(&oldVal, self->m_ram + wp.address, wp.size);
+            }
+
+            uint8_t tempBytes[4] = {0};
+            std::memcpy(tempBytes, &oldVal, wp.size);
+
+            uint32_t overlapStart = std::max(writeAddr, wp.address);
+            uint32_t overlapEnd = std::min(writeAddr + writeSize, wp.address + wp.size);
+            for (uint32_t a = overlapStart; a < overlapEnd; ++a) {
+                uint32_t writeOffset = a - writeAddr;
+                uint32_t wpOffset = a - wp.address;
+                uint8_t byteVal = static_cast<uint8_t>((value >> (writeOffset * 8)) & 0xFF);
+                tempBytes[wpOffset] = byteVal;
+            }
+
+            uint32_t newVal = 0;
+            std::memcpy(&newVal, tempBytes, wp.size);
+
+            bool hit = false;
+            if (wp.condition == WatchCondition::OnWrite) {
+                hit = true;
+            } else if (wp.condition == WatchCondition::OnChange) {
+                hit = (newVal != oldVal);
+            } else if (wp.condition == WatchCondition::OnEqual) {
+                hit = (newVal == wp.targetValue);
+            }
+
+            if (hit) {
+                wp.previousValue = oldVal;
+                wp.currentValue = newVal;
+                wp.hitCount++;
+                triggered = true;
+
+                char hexBuf[256];
+                snprintf(hexBuf, sizeof(hexBuf), "[Watchpoint Hit] #%u (%s) @ 0x%08X changed: 0x%X -> 0x%X\n",
+                    wp.id, wp.name.empty() ? "var" : wp.name.c_str(), wp.address, oldVal, newVal);
+                hitMsg = hexBuf;
+                break;
+            }
+        }
+    }
+
+    if (triggered) {
+        uc_emu_stop(uc);
+        self->m_workerActive = false;
+        self->m_status = EmulatorStatus::Paused;
+        self->m_cachedState.status = EmulatorStatus::Paused;
+        self->m_console.WriteText(hitMsg);
+    }
 }
 
 // -----------------------------------------------------------------------------

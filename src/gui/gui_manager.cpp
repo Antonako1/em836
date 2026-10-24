@@ -73,9 +73,21 @@ void GuiManager::RenderMainMenuBar(Emulator& emu, GuiState& state, SDL_Renderer*
                 }
             }
 
-            if (ImGui::MenuItem("Single Step", "F10", false, !isRunning)) {
-                emu.Step();
+            ImGui::Separator();
+
+            if (ImGui::MenuItem("Step Into", "F11", false, !isRunning)) {
+                emu.StepInto();
             }
+
+            if (ImGui::MenuItem("Step Over", "F10", false, !isRunning)) {
+                emu.StepOver();
+            }
+
+            if (ImGui::MenuItem("Step Out", "Shift+F11", false, !isRunning)) {
+                emu.StepOut();
+            }
+
+            ImGui::Separator();
 
             if (ImGui::MenuItem("Reset CPU & Memory", "Ctrl+R")) {
                 emu.Reset();
@@ -98,6 +110,7 @@ void GuiManager::RenderMainMenuBar(Emulator& emu, GuiState& state, SDL_Renderer*
             ImGui::MenuItem("CPU Registers", nullptr, &state.showRegisters);
             ImGui::MenuItem("Execution Controls", nullptr, &state.showExecution);
             ImGui::MenuItem("Disassembly", nullptr, &state.showDisassembly);
+            ImGui::MenuItem("Breakpoints & Watchpoints", nullptr, &state.showBreakpoints);
             ImGui::MenuItem("VGA Display", nullptr, &state.showVga);
             ImGui::MenuItem("Console & Output", nullptr, &state.showConsole);
             ImGui::MenuItem("Code Editor", nullptr, &state.showEditor);
@@ -151,6 +164,130 @@ bool GuiManager::LoadDsmForFile(GuiState& state, const std::string& filePath, co
         state.dsmLines = res.lines;
         return true;
     }
+    return false;
+}
+
+void GuiManager::RefreshDsmModules(Emulator& emu, GuiState& state) {
+    state.dsmModules.clear();
+    const std::string& astracPath = emu.GetConfig().astracPath;
+
+    // 1. Main Executable Module
+    std::string mainFile = emu.GetConfig().lastLoadedFile;
+    if (mainFile.empty() && !state.editorFilePath.empty()) {
+        mainFile = state.editorFilePath;
+    }
+
+    if (!mainFile.empty() && std::filesystem::exists(mainFile)) {
+        DsmModuleView mainModView;
+        mainModView.filePath = mainFile;
+        mainModView.moduleName = std::filesystem::path(mainFile).filename().string();
+        mainModView.isLibrary = false;
+        mainModView.baseAddress = 0x00000000;
+
+        const auto& mainMod = emu.GetMainModule();
+        if (mainMod.has_value()) {
+            mainModView.codeOffset = mainMod->header.code_offset;
+            mainModView.codeSize = mainMod->header.code_size;
+            if (!mainMod->fileName.empty()) {
+                mainModView.moduleName = mainMod->fileName;
+            }
+        }
+
+        DisassemblyResult res = AstraCToolchain::DisassembleFile(mainFile, astracPath, state.dsmBits, state.dsmOrg, true);
+        if (res.success) {
+            mainModView.lines = res.lines;
+        }
+        state.dsmModules.push_back(std::move(mainModView));
+    }
+
+    // 2. Loaded Dynamic Libraries
+    const auto& libs = emu.GetLoadedLibraries();
+    for (const auto& lib : libs) {
+        DsmModuleView libModView;
+        libModView.isLibrary = true;
+        libModView.baseAddress = lib.baseAddress;
+        libModView.codeOffset = lib.header.code_offset;
+        libModView.codeSize = lib.header.code_size;
+        libModView.moduleName = lib.fileName;
+        libModView.filePath = lib.filePath;
+
+        if (libModView.filePath.empty() || !std::filesystem::exists(libModView.filePath)) {
+            std::filesystem::path search1 = std::filesystem::path(mainFile).parent_path() / libModView.moduleName;
+            std::filesystem::path search2 = FindExamplesDirectory() / libModView.moduleName;
+            if (std::filesystem::exists(search1)) {
+                libModView.filePath = search1.string();
+            } else if (std::filesystem::exists(search2)) {
+                libModView.filePath = search2.string();
+            }
+        }
+
+        if (!libModView.filePath.empty() && std::filesystem::exists(libModView.filePath)) {
+            DisassemblyResult res = AstraCToolchain::DisassembleFile(libModView.filePath, astracPath, 32, 0, true);
+            if (res.success) {
+                libModView.lines = res.lines;
+            }
+        }
+
+        state.dsmModules.push_back(std::move(libModView));
+    }
+
+    if (state.selectedDsmModuleIndex >= static_cast<int>(state.dsmModules.size())) {
+        state.selectedDsmModuleIndex = 0;
+    }
+
+    if (!state.dsmModules.empty()) {
+        state.dsmLines = state.dsmModules[state.selectedDsmModuleIndex].lines;
+        state.dsmLoadedPath = state.dsmModules[state.selectedDsmModuleIndex].filePath;
+    }
+}
+
+bool GuiManager::JumpToDsmSymbol(GuiState& state, const std::string& moduleName, const std::string& symbolName) {
+    if (state.dsmModules.empty()) return false;
+
+    auto iequals = [](const std::string& a, const std::string& b) {
+        if (a.size() != b.size()) return false;
+        for (size_t i = 0; i < a.size(); ++i) {
+            if (std::tolower(static_cast<unsigned char>(a[i])) != std::tolower(static_cast<unsigned char>(b[i])))
+                return false;
+        }
+        return true;
+    };
+
+    int targetModIdx = -1;
+    if (!moduleName.empty()) {
+        for (size_t i = 0; i < state.dsmModules.size(); ++i) {
+            if (iequals(state.dsmModules[i].moduleName, moduleName) ||
+                iequals(std::filesystem::path(state.dsmModules[i].filePath).filename().string(), moduleName)) {
+                targetModIdx = static_cast<int>(i);
+                break;
+            }
+        }
+    }
+
+    if (targetModIdx < 0) {
+        targetModIdx = state.selectedDsmModuleIndex;
+    }
+
+    if (targetModIdx < 0 || targetModIdx >= static_cast<int>(state.dsmModules.size())) {
+        return false;
+    }
+
+    state.selectedDsmModuleIndex = targetModIdx;
+    state.dsmLines = state.dsmModules[targetModIdx].lines;
+    state.dsmLoadedPath = state.dsmModules[targetModIdx].filePath;
+
+    std::string needle = symbolName;
+    std::transform(needle.begin(), needle.end(), needle.begin(), [](unsigned char c) { return std::toupper(c); });
+
+    for (size_t lineIdx = 0; lineIdx < state.dsmLines.size(); ++lineIdx) {
+        std::string upperLine = state.dsmLines[lineIdx];
+        std::transform(upperLine.begin(), upperLine.end(), upperLine.begin(), [](unsigned char c) { return std::toupper(c); });
+        if (upperLine.find("<" + needle + ">") != std::string::npos || upperLine.find("<" + needle + ":") != std::string::npos) {
+            state.dsmSelectedLine = static_cast<int>(lineIdx);
+            return true;
+        }
+    }
+
     return false;
 }
 
@@ -237,6 +374,8 @@ void GuiManager::RenderAll(Emulator& emu, GuiState& state, SDL_Renderer* rendere
     ImGui::SetNextWindowPos(ImVec2(col3X, botRightY), cond);
     ImGui::SetNextWindowSize(ImVec2(rightColW, botRightH), cond);
     RenderMemoryAndAcfhWindow(emu, state);
+
+    RenderBreakpointsAndWatchesWindow(emu, state);
 
     // Reset layout flag after applying to all windows
     if (state.requestLayoutReset) {
@@ -531,4 +670,240 @@ void GuiManager::RenderAcfhInspectorContent(Emulator& emu, GuiState& state) {
         }
 }
 
+void GuiManager::RenderBreakpointsAndWatchesWindow(Emulator& emu, GuiState& state) {
+    if (!state.showBreakpoints) return;
+
+    if (ImGui::Begin("Breakpoints & Watchpoints", &state.showBreakpoints)) {
+        if (ImGui::BeginTabBar("bp_watch_tab_bar")) {
+            // =============================================================
+            // Tab 1: Execution Breakpoints
+            // =============================================================
+            auto bpList = emu.GetBreakpointsList();
+            std::string bpTabTitle = "Breakpoints (" + std::to_string(bpList.size()) + ")";
+            if (ImGui::BeginTabItem(bpTabTitle.c_str())) {
+                static char bpQuickAddr[16] = "00000000";
+                ImGui::Text("Address:");
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(80);
+                ImGui::InputText("##bp_quick_addr", bpQuickAddr, sizeof(bpQuickAddr), ImGuiInputTextFlags_CharsHexadecimal);
+                ImGui::SameLine();
+                if (ImGui::Button(" + Add Breakpoint ")) {
+                    uint32_t a = static_cast<uint32_t>(strtoul(bpQuickAddr, nullptr, 16));
+                    emu.AddBreakpoint(a);
+                }
+                ImGui::SameLine();
+                if (ImGui::Button(" Clear All Breakpoints ")) {
+                    emu.ClearBreakpoints();
+                }
+
+                ImGui::Separator();
+
+                if (bpList.empty()) {
+                    ImGui::TextDisabled("No active breakpoints. Click gutter in DSM/Live Disassembly or enter an address above.");
+                } else {
+                    if (ImGui::BeginTable("BpTable", 5, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable)) {
+                        ImGui::TableSetupColumn("Enabled", ImGuiTableColumnFlags_WidthFixed, 60.0f);
+                        ImGui::TableSetupColumn("Address", ImGuiTableColumnFlags_WidthFixed, 90.0f);
+                        ImGui::TableSetupColumn("Module / Symbol", ImGuiTableColumnFlags_WidthStretch);
+                        ImGui::TableSetupColumn("Hits", ImGuiTableColumnFlags_WidthFixed, 60.0f);
+                        ImGui::TableSetupColumn("Actions", ImGuiTableColumnFlags_WidthFixed, 140.0f);
+                        ImGui::TableHeadersRow();
+
+                        for (size_t i = 0; i < bpList.size(); ++i) {
+                            const auto& bp = bpList[i];
+                            ImGui::TableNextRow();
+
+                            // 1. Enabled Checkbox
+                            ImGui::TableNextColumn();
+                            bool en = bp.enabled;
+                            std::string cbId = "##bp_en_" + std::to_string(bp.address);
+                            if (ImGui::Checkbox(cbId.c_str(), &en)) {
+                                emu.SetBreakpointEnabled(bp.address, en);
+                            }
+
+                            // 2. Address
+                            ImGui::TableNextColumn();
+                            ImGui::Text("0x%08X", bp.address);
+
+                            // 3. Module & Symbol
+                            ImGui::TableNextColumn();
+                            std::string sym = bp.symbol.empty()
+                                ? (bp.moduleName.empty() ? "-" : bp.moduleName)
+                                : (bp.moduleName.empty() ? bp.symbol : (bp.moduleName + " <" + bp.symbol + ">"));
+                            ImGui::Text("%s", sym.c_str());
+
+                            // 4. Hit Count
+                            ImGui::TableNextColumn();
+                            ImGui::Text("%llu", bp.hitCount);
+
+                            // 5. Actions
+                            ImGui::TableNextColumn();
+                            ImGui::PushID(static_cast<int>(i));
+                            if (ImGui::SmallButton("Jump")) {
+                                state.disasmBaseAddress = bp.address;
+                                snprintf(state.disasmAddressInput, sizeof(state.disasmAddressInput), "%08X", bp.address);
+                                state.disasmFollowEip = false;
+                            }
+                            ImGui::SameLine();
+                            if (ImGui::SmallButton("Delete")) {
+                                emu.RemoveBreakpoint(bp.address);
+                                ImGui::PopID();
+                                break;
+                            }
+                            ImGui::PopID();
+                        }
+
+                        ImGui::EndTable();
+                    }
+                }
+                ImGui::EndTabItem();
+            }
+
+            // =============================================================
+            // Tab 2: Memory Watchpoints (Stop on Value Change / Write)
+            // =============================================================
+            auto wpList = emu.GetWatchpointsList();
+            std::string wpTabTitle = "Watchpoints (" + std::to_string(wpList.size()) + ")";
+            if (ImGui::BeginTabItem(wpTabTitle.c_str())) {
+                static char wpName[32] = "";
+                static char wpAddr[16] = "00000000";
+                static int wpSizeIdx = 2; // 0 = 1 byte, 1 = 2 bytes, 2 = 4 bytes
+                static int wpCondIdx = 0; // 0 = OnChange, 1 = OnWrite, 2 = OnEqual
+                static char wpTargetVal[16] = "00000000";
+
+                ImGui::Text("Name:");
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(90);
+                ImGui::InputText("##wp_name_input", wpName, sizeof(wpName));
+
+                ImGui::SameLine();
+                ImGui::Text("Addr:");
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(75);
+                ImGui::InputText("##wp_addr_input", wpAddr, sizeof(wpAddr), ImGuiInputTextFlags_CharsHexadecimal);
+
+                ImGui::SameLine();
+                const char* sizeItems[] = { "1 B", "2 B", "4 B" };
+                ImGui::SetNextItemWidth(55);
+                ImGui::Combo("##wp_size_combo", &wpSizeIdx, sizeItems, IM_ARRAYSIZE(sizeItems));
+
+                ImGui::SameLine();
+                const char* condItems[] = { "On Change", "On Write", "Equals" };
+                ImGui::SetNextItemWidth(90);
+                ImGui::Combo("##wp_cond_combo", &wpCondIdx, condItems, IM_ARRAYSIZE(condItems));
+
+                if (wpCondIdx == 2) {
+                    ImGui::SameLine();
+                    ImGui::SetNextItemWidth(70);
+                    ImGui::InputText("##wp_val_input", wpTargetVal, sizeof(wpTargetVal), ImGuiInputTextFlags_CharsHexadecimal);
+                }
+
+                ImGui::SameLine();
+                if (ImGui::Button(" + Add Watch ")) {
+                    uint32_t addr = static_cast<uint32_t>(strtoul(wpAddr, nullptr, 16));
+                    uint32_t sz = (wpSizeIdx == 0) ? 1 : ((wpSizeIdx == 1) ? 2 : 4);
+                    WatchCondition cond = static_cast<WatchCondition>(wpCondIdx);
+                    uint32_t targetVal = static_cast<uint32_t>(strtoul(wpTargetVal, nullptr, 16));
+                    std::string label = (wpName[0] != '\0') ? wpName : "watch";
+                    emu.AddWatchpoint(addr, sz, cond, targetVal, label);
+                    wpName[0] = '\0';
+                }
+
+                ImGui::SameLine();
+                if (ImGui::Button(" Clear All Watches ")) {
+                    emu.ClearWatchpoints();
+                }
+
+                ImGui::Separator();
+
+                if (wpList.empty()) {
+                    ImGui::TextDisabled("No active memory watchpoints. Add a watch above to pause execution when a memory location or variable changes.");
+                } else {
+                    if (ImGui::BeginTable("WpTable", 9, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable)) {
+                        ImGui::TableSetupColumn("En", ImGuiTableColumnFlags_WidthFixed, 30.0f);
+                        ImGui::TableSetupColumn("ID", ImGuiTableColumnFlags_WidthFixed, 35.0f);
+                        ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthFixed, 80.0f);
+                        ImGui::TableSetupColumn("Address", ImGuiTableColumnFlags_WidthFixed, 85.0f);
+                        ImGui::TableSetupColumn("Condition", ImGuiTableColumnFlags_WidthFixed, 85.0f);
+                        ImGui::TableSetupColumn("Current Val", ImGuiTableColumnFlags_WidthFixed, 85.0f);
+                        ImGui::TableSetupColumn("Prev Val", ImGuiTableColumnFlags_WidthFixed, 85.0f);
+                        ImGui::TableSetupColumn("Hits", ImGuiTableColumnFlags_WidthFixed, 45.0f);
+                        ImGui::TableSetupColumn("Actions", ImGuiTableColumnFlags_WidthFixed, 100.0f);
+                        ImGui::TableHeadersRow();
+
+                        for (size_t i = 0; i < wpList.size(); ++i) {
+                            const auto& wp = wpList[i];
+                            ImGui::TableNextRow();
+
+                            // 1. Enabled Checkbox
+                            ImGui::TableNextColumn();
+                            bool en = wp.enabled;
+                            std::string cbId = "##wp_en_" + std::to_string(wp.id);
+                            if (ImGui::Checkbox(cbId.c_str(), &en)) {
+                                emu.SetWatchpointEnabled(wp.id, en);
+                            }
+
+                            // 2. ID
+                            ImGui::TableNextColumn();
+                            ImGui::Text("#%u", wp.id);
+
+                            // 3. Name
+                            ImGui::TableNextColumn();
+                            ImGui::Text("%s", wp.name.c_str());
+
+                            // 4. Address
+                            ImGui::TableNextColumn();
+                            ImGui::Text("0x%08X", wp.address);
+
+                            // 5. Condition
+                            ImGui::TableNextColumn();
+                            if (wp.condition == WatchCondition::OnChange) {
+                                ImGui::Text("On Change");
+                            } else if (wp.condition == WatchCondition::OnWrite) {
+                                ImGui::Text("On Write");
+                            } else {
+                                ImGui::Text("== 0x%08X", wp.targetValue);
+                            }
+
+                            // 6. Current Val
+                            ImGui::TableNextColumn();
+                            ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.4f, 1.0f), "0x%08X", wp.currentValue);
+
+                            // 7. Previous Val
+                            ImGui::TableNextColumn();
+                            ImGui::TextDisabled("0x%08X", wp.previousValue);
+
+                            // 8. Hit Count
+                            ImGui::TableNextColumn();
+                            ImGui::Text("%llu", wp.hitCount);
+
+                            // 9. Actions
+                            ImGui::TableNextColumn();
+                            ImGui::PushID(static_cast<int>(wp.id));
+                            if (ImGui::SmallButton("Hex")) {
+                                state.memoryCurrentAddress = wp.address;
+                                snprintf(state.memoryAddressInput, sizeof(state.memoryAddressInput), "%08X", wp.address);
+                            }
+                            ImGui::SameLine();
+                            if (ImGui::SmallButton("Del")) {
+                                emu.RemoveWatchpoint(wp.id);
+                                ImGui::PopID();
+                                break;
+                            }
+                            ImGui::PopID();
+                        }
+
+                        ImGui::EndTable();
+                    }
+                }
+                ImGui::EndTabItem();
+            }
+
+            ImGui::EndTabBar();
+        }
+    }
+    ImGui::End();
+}
+
 } // namespace em836
+

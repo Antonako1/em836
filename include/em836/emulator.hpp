@@ -116,6 +116,45 @@ struct DisassemblyItem {
 };
 
 /**
+ * @struct BreakpointItem
+ * @brief Representation of an execution breakpoint.
+ */
+struct BreakpointItem {
+    uint32_t address = 0;
+    bool enabled = true;
+    uint64_t hitCount = 0;
+    std::string moduleName = "";
+    std::string symbol = "";
+};
+
+/**
+ * @enum WatchCondition
+ * @brief Trigger condition for memory watchpoints.
+ */
+enum class WatchCondition {
+    OnChange = 0,   ///< Triggers when value at address changes
+    OnWrite = 1,    ///< Triggers on any write to the memory address
+    OnEqual = 2     ///< Triggers when value at address equals targetValue
+};
+
+/**
+ * @struct WatchpointItem
+ * @brief Memory watchpoint record tracking address, size, trigger condition, and values.
+ */
+struct WatchpointItem {
+    uint32_t id = 0;
+    uint32_t address = 0;
+    uint32_t size = 4;                      ///< 1, 2, or 4 bytes
+    WatchCondition condition = WatchCondition::OnChange;
+    uint32_t targetValue = 0;               ///< For OnEqual condition
+    uint32_t currentValue = 0;              ///< Last observed value in guest RAM
+    uint32_t previousValue = 0;             ///< Value before last change
+    uint64_t hitCount = 0;
+    bool enabled = true;
+    std::string name = "";                  ///< Optional variable name or label
+};
+
+/**
  * @class Emulator
  * @brief Central controller for i386 CPU emulation, hardware state, and background threading.
  */
@@ -170,6 +209,27 @@ public:
     void Step();
 
     /**
+     * @brief Executes exactly one instruction, entering function calls (Step Into).
+     */
+    void StepInto();
+
+    /**
+     * @brief Executes past function calls without entering them (Step Over).
+     * If the current instruction is not a CALL, behaves like Step Into.
+     */
+    void StepOver();
+
+    /**
+     * @brief Continues execution until the current subroutine returns (Step Out).
+     * Stops at the return address in the caller.
+     */
+    void StepOut();
+
+    bool IsStepping() const { return m_status == EmulatorStatus::Stepping || m_stepOverActive || m_stepOutActive; }
+    bool IsStepOverActive() const { return m_stepOverActive; }
+    bool IsStepOutActive() const { return m_stepOutActive; }
+
+    /**
      * @brief Sets execution clock speed throttling in Hertz (0 = Unlimited).
      */
     void SetClockSpeed(uint32_t hz);
@@ -190,10 +250,22 @@ public:
     // -------------------------------------------------------------
 
     void ToggleBreakpoint(uint32_t address);
-    void AddBreakpoint(uint32_t address);
+    void AddBreakpoint(uint32_t address, const std::string& symbol = "");
+    void SetBreakpointEnabled(uint32_t address, bool enabled);
     void RemoveBreakpoint(uint32_t address);
     void ClearBreakpoints();
     bool HasBreakpoint(uint32_t address) const;
+    std::vector<BreakpointItem> GetBreakpointsList() const;
+
+    // -------------------------------------------------------------
+    // Watchpoints (Data Breakpoints)
+    // -------------------------------------------------------------
+
+    uint32_t AddWatchpoint(uint32_t address, uint32_t size = 4, WatchCondition cond = WatchCondition::OnChange, uint32_t targetVal = 0, const std::string& name = "");
+    void SetWatchpointEnabled(uint32_t id, bool enabled);
+    void RemoveWatchpoint(uint32_t id);
+    void ClearWatchpoints();
+    std::vector<WatchpointItem> GetWatchpointsList() const;
 
     // -------------------------------------------------------------
     // Binary & Memory Loading
@@ -331,6 +403,7 @@ private:
     uc_hook m_intrHook = 0;
     uc_hook m_portInHook = 0;
     uc_hook m_portOutHook = 0;
+    uc_hook m_memWriteHook = 0;
 
     // Capstone Engine
     csh m_capstone = 0;
@@ -345,12 +418,20 @@ private:
     std::atomic<bool> m_workerActive{false};
     std::atomic<bool> m_workerRunningQuantum{false};
     std::atomic<bool> m_stepRequested{false};
+    std::atomic<bool> m_stepOverActive{false};
+    std::atomic<uint32_t> m_stepOverTarget{0};
+    std::atomic<uint32_t> m_stepOverInitialEsp{0};
+    std::atomic<bool> m_stepOutActive{false};
+    std::atomic<bool> m_stepOutHitRet{false};
+    std::atomic<uint32_t> m_stepOutInitialEsp{0};
     std::atomic<uint32_t> m_clockSpeedHz{0};
     std::atomic<uint32_t> m_cpuBits{32};
 
     mutable std::mutex m_stateMutex;
     CpuState m_cachedState;
-    std::unordered_set<uint32_t> m_breakpoints;
+    std::unordered_map<uint32_t, BreakpointItem> m_breakpoints;
+    std::vector<WatchpointItem> m_watchpoints;
+    uint32_t m_nextWatchpointId = 1;
 
     // Subsystems
     VgaSubsystem m_vga;
@@ -367,6 +448,7 @@ private:
     static void HookIntrCallback(uc_engine* uc, uint32_t intno, void* user_data);
     static uint32_t HookPortInCallback(uc_engine* uc, uint32_t port, int size, void* user_data);
     static void HookPortOutCallback(uc_engine* uc, uint32_t port, int size, uint32_t value, void* user_data);
+    static void HookMemWriteCallback(uc_engine* uc, uc_mem_type type, uint64_t address, int size, int64_t value, void* user_data);
 };
 
 } // namespace em836
