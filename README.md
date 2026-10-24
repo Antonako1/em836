@@ -13,7 +13,9 @@
   - **Mode 0 (Text Mode @ `0x000B8000`)**: 80×25 character/attribute grid rendered with an embedded 8×16 IBM CP437 bitmap font.
   - **Mode 1 (Graphics Mode @ `0x000A0000`)**: 640×480 16-color linear framebuffer with software-accelerated drawing primitives (`PlotPixel`, Bresenham `DrawLine`, `FillRect`, `ClearScreen`).
 - **Unified `INT 0x88` Syscall ABI**: Deterministic register-based system call dispatcher for Process Control, Console I/O, Host File I/O, Dynamic Heap Management (`SYS_SBRK`), and Accelerated 2D Graphics, plus legacy compatibility for `INT 0x10` (BIOS), `INT 0x21` (DOS), `INT 0x80` (Linux), and I/O ports `0x03F8` (COM1) / `0x00E9` (Bochs).
-- **[AstraC Toolchain](https://antonako.net/astrac/index.php) Integration**: One-click assembly of `.as` files and compilation of `.ac` (Astra C) files directly into guest RAM, supporting both raw flat binaries (`.BIN`) and 108-byte `ACFH` executables.
+- **[AstraC Toolchain](https://antonako.net/astrac/index.php) Integration**: One-click assembly of `.as` files and compilation of `.ac` (Astra C) files directly into guest RAM, supporting raw flat binaries (`.bin`), 112-byte `ACFH` executables (`.exe`), and dynamic libraries (`.lib`) with table emission toggles (`ot`, `ft`, `it`).
+- **ACFH Dynamic Linker & Module Arena**: Dedicated dynamic library memory arena at `0x00100000`–`0x001FFFFF` with base relocation calculation, automatic resolution of imported `.lib` files, `CALL rel32` (`0xE8`) import table patching, and multi-module runaway execution protection.
+- **ACFH Module & Library Inspector**: Dedicated dockable GUI inspector and CLI commands (`loadlib`, `unloadlib`, `libs`, `acfh`) to view section tables, base relocations, exported functions, and import patch statuses with one-click disassembly jumping.
 
 ---
 
@@ -23,6 +25,8 @@ All test programs live in the [`examples/`](examples/) directory and can be open
 
 | File | Language | Demonstrated Syscalls & Hardware Features |
 | :--- | :--- | :--- |
+| [`examples/math_lib.ac`](examples/math_lib.ac) | [Astra C (`.ac`)](https://antonako.net/astrac/docs/ac.php) | ACFH Dynamic Library (`.lib`) exporting reusable math functions (`lib_add`, `lib_mult`, `lib_factorial`, `lib_fibonacci`) into the `0x00100000` library arena. |
+| [`examples/exe_import_demo.ac`](examples/exe_import_demo.ac) | [Astra C (`.ac`)](https://antonako.net/astrac/docs/ac.php) | ACFH Executable (`.exe`) dynamically linking `math_lib.lib` via `#import`, resolving symbols, executing cross-module calls, and printing results. |
 | [`examples/syscalls.inc`](examples/syscalls.inc) | Header (`.inc`) | Shared `#define` constants for all `INT 0x88` syscall IDs (`0x01`–`0x44`), file flags, video modes, and 16-color palette indices. |
 | [`examples/graphics_demo.as`](examples/graphics_demo.as) | Assembly (`.as`) | All 5 Graphics syscalls: `SYS_GFX_SET_MODE` (`0x40`), `SYS_GFX_CLEAR` (`0x41`), `SYS_GFX_PLOT` (`0x42`), `SYS_GFX_LINE` (`0x43`), `SYS_GFX_FILL_RECT` (`0x44`), plus `SYS_PRINT_STR` (`0x11`) & `SYS_EXIT` (`0x01`). |
 | [`examples/astrac_c_demo.ac`](examples/astrac_c_demo.ac) | [Astra C (`.ac`)](https://antonako.net/astrac/docs/ac.php) | High-level Astra C program using `for` loops, structs, and inline `asm { ... }` syscall wrappers to render a 14-bar color chart. |

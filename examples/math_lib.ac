@@ -1,0 +1,49 @@
+// =============================================================================
+// em836 ACFH Dynamic Library Demo (examples/math_lib.ac)
+// Exported library functions for ACFH .lib generation:
+//   - lib_add(a, b)
+//   - lib_mult(a, b)
+//   - lib_factorial(n)
+//   - lib_fibonacci(n)
+// Compile with: AstraC.exe comp math_lib.ac type lib ot,ft,it
+// =============================================================================
+
+U32 main() {
+    return 0;
+}
+
+U32 lib_add(U32 a, U32 b) {
+    return a + b;
+}
+
+U32 lib_mult(U32 a, U32 b) {
+    return a * b;
+}
+
+U32 lib_factorial(U32 n) {
+    if (n <= 1) {
+        return 1;
+    }
+    U32 res = 1;
+    U32 i = 2;
+    while (i <= n) {
+        res = res * i;
+        i = i + 1;
+    }
+    return res;
+}
+
+U32 lib_fibonacci(U32 n) {
+    if (n == 0) return 0;
+    if (n == 1) return 1;
+    U32 a = 0;
+    U32 b = 1;
+    U32 i = 2;
+    while (i <= n) {
+        U32 c = a + b;
+        a = b;
+        b = c;
+        i = i + 1;
+    }
+    return b;
+}

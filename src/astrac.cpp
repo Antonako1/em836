@@ -63,6 +63,93 @@ bool AstraCToolchain::ParseAcfhHeader(const uint8_t* buffer, size_t size, AcFile
     return false;
 }
 
+bool AstraCToolchain::ParseAcfhModule(const uint8_t* buffer, size_t size, AcfhParsedModule& outModule) {
+    if (!buffer || size < sizeof(AcFileHeader)) {
+        return false;
+    }
+    if (std::memcmp(buffer, "ACFH", 4) != 0) {
+        return false;
+    }
+
+    outModule = AcfhParsedModule{};
+    std::memcpy(&outModule.header, buffer, sizeof(AcFileHeader));
+    outModule.isLibrary = (outModule.header.flags & AC_FLAG_DYNAMIC) != 0;
+    outModule.rawBuffer.assign(buffer, buffer + size);
+
+    // 1. Relocation Table
+    if (outModule.header.reloc_offset != 0xFFFFFFFF && outModule.header.reloc_size > 0) {
+        if (outModule.header.reloc_offset + outModule.header.reloc_size <= size) {
+            size_t count = outModule.header.reloc_size / sizeof(uint32_t);
+            outModule.relocations.resize(count);
+            std::memcpy(outModule.relocations.data(), buffer + outModule.header.reloc_offset, count * sizeof(uint32_t));
+        }
+    }
+
+    // 2. Function Export Table
+    if (outModule.header.func_table_offset != 0xFFFFFFFF && outModule.header.func_table_size >= sizeof(AcFuncTableHdr)) {
+        if (outModule.header.func_table_offset + outModule.header.func_table_size <= size) {
+            const uint8_t* ftPtr = buffer + outModule.header.func_table_offset;
+            AcFuncTableHdr fHdr;
+            std::memcpy(&fHdr, ftPtr, sizeof(AcFuncTableHdr));
+
+            size_t entriesBytes = fHdr.entry_count * sizeof(AcFuncEntry);
+            if (sizeof(AcFuncTableHdr) + entriesBytes + fHdr.string_table_size <= outModule.header.func_table_size) {
+                const AcFuncEntry* entries = reinterpret_cast<const AcFuncEntry*>(ftPtr + sizeof(AcFuncTableHdr));
+                const char* strtab = reinterpret_cast<const char*>(ftPtr + sizeof(AcFuncTableHdr) + entriesBytes);
+
+                for (uint32_t i = 0; i < fHdr.entry_count; ++i) {
+                    AcfhExportSymbol exp;
+                    if (entries[i].name_offset < fHdr.string_table_size) {
+                        exp.name = strtab + entries[i].name_offset;
+                    } else {
+                        exp.name = "<unknown>";
+                    }
+                    exp.codeOffset = entries[i].address;
+                    exp.runtimeAddress = entries[i].address;
+                    exp.paramSize = entries[i].param_size;
+                    exp.flags = entries[i].flags;
+                    outModule.exports.push_back(exp);
+                }
+            }
+        }
+    }
+
+    // 3. Import Table
+    if (outModule.header.import_table_offset != 0xFFFFFFFF && outModule.header.import_table_size >= sizeof(AcImportTableHdr)) {
+        if (outModule.header.import_table_offset + outModule.header.import_table_size <= size) {
+            const uint8_t* itPtr = buffer + outModule.header.import_table_offset;
+            AcImportTableHdr iHdr;
+            std::memcpy(&iHdr, itPtr, sizeof(AcImportTableHdr));
+
+            size_t entriesBytes = iHdr.entry_count * sizeof(AcImportEntry);
+            if (sizeof(AcImportTableHdr) + entriesBytes + iHdr.string_table_size <= outModule.header.import_table_size) {
+                const AcImportEntry* entries = reinterpret_cast<const AcImportEntry*>(itPtr + sizeof(AcImportTableHdr));
+                const char* strtab = reinterpret_cast<const char*>(itPtr + sizeof(AcImportTableHdr) + entriesBytes);
+
+                for (uint32_t i = 0; i < iHdr.entry_count; ++i) {
+                    AcfhImportSymbol imp;
+                    if (entries[i].lib_name_offset < iHdr.string_table_size) {
+                        imp.libName = strtab + entries[i].lib_name_offset;
+                    }
+                    if (entries[i].func_name_offset < iHdr.string_table_size) {
+                        imp.funcName = strtab + entries[i].func_name_offset;
+                    }
+                    imp.filePatchOffset = entries[i].patch_offset;
+                    imp.codePatchOffset = (entries[i].patch_offset >= outModule.header.code_offset)
+                        ? (entries[i].patch_offset - outModule.header.code_offset)
+                        : entries[i].patch_offset;
+                    imp.runtimePatchAddress = 0;
+                    imp.resolvedAddress = 0;
+                    imp.resolved = false;
+                    outModule.imports.push_back(imp);
+                }
+            }
+        }
+    }
+
+    return true;
+}
+
 #ifdef _WIN32
 static bool RunProcessWithOutput(const std::string& cmdLine, const std::string& workingDir, std::string& outOutput, int& outExitCode) {
     HANDLE hChildStdOutRead = NULL;
@@ -144,7 +231,9 @@ static bool RunProcessWithOutput(const std::string& cmdLine, const std::string& 
 }
 #endif
 
-CompilationResult AstraCToolchain::CompileFile(const std::string& inputFilePath, const std::string& customAstraCPath) {
+CompilationResult AstraCToolchain::CompileFile(const std::string& inputFilePath,
+                                              const std::string& customAstraCPath,
+                                              const CompileOptions& options) {
     CompilationResult result;
     std::filesystem::path astracExe = FindAstraC(customAstraCPath);
 
@@ -189,26 +278,40 @@ CompilationResult AstraCToolchain::CompileFile(const std::string& inputFilePath,
         subCommand = "comp";
     }
 
-    // Determine target binary output path
-    std::filesystem::path binaryPath = inPath;
-    binaryPath.replace_extension(".bin");
-    std::filesystem::path upperBin = inPath;
-    upperBin.replace_extension(".BIN");
+    // Determine target binary output paths
+    std::filesystem::path binPathLower = inPath;
+    binPathLower.replace_extension(".bin");
+    std::filesystem::path binPathUpper = inPath;
+    binPathUpper.replace_extension(".BIN");
+    std::filesystem::path exePath = inPath;
+    exePath.replace_extension(".exe");
+    std::filesystem::path libPath = inPath;
+    libPath.replace_extension(".lib");
 
     // Remove existing stale binaries if present
-    if (std::filesystem::exists(binaryPath)) {
-        std::error_code ec;
-        std::filesystem::remove(binaryPath, ec);
-    }
-    if (std::filesystem::exists(upperBin)) {
-        std::error_code ec;
-        std::filesystem::remove(upperBin, ec);
-    }
+    std::error_code ec;
+    if (std::filesystem::exists(binPathLower)) std::filesystem::remove(binPathLower, ec);
+    if (std::filesystem::exists(binPathUpper)) std::filesystem::remove(binPathUpper, ec);
+    if (options.format == TargetFormat::AcfhExe && std::filesystem::exists(exePath)) std::filesystem::remove(exePath, ec);
+    if (options.format == TargetFormat::AcfhLib && std::filesystem::exists(libPath)) std::filesystem::remove(libPath, ec);
 
     std::string cmd = "\"" + astracExe.string() + "\" " + subCommand + " \"" + inPath.string() + "\"";
     if (is16Bit) {
         cmd += " arch i286 bits 16";
     }
+
+    if (options.format == TargetFormat::AcfhExe) {
+        cmd += " type exe";
+        if (options.emitOffsetTable) cmd += " ot";
+        if (options.emitFuncTable)   cmd += " ft";
+        if (options.emitImportTable) cmd += " it";
+    } else if (options.format == TargetFormat::AcfhLib) {
+        cmd += " type lib";
+        if (options.emitOffsetTable) cmd += " ot";
+        if (options.emitFuncTable)   cmd += " ft";
+        if (options.emitImportTable) cmd += " it";
+    }
+
     std::string workDir = inPath.parent_path().string();
 
     int exitCode = -1;
@@ -222,13 +325,36 @@ CompilationResult AstraCToolchain::CompileFile(const std::string& inputFilePath,
     result.outputLog = output;
     result.exitCode = exitCode;
 
-    // Check if output binary was produced
-    if (ok && std::filesystem::exists(binaryPath)) {
+    // Identify which raw file AstraC generated (.BIN or .bin)
+    std::filesystem::path rawProduced;
+    if (std::filesystem::exists(binPathUpper)) {
+        rawProduced = binPathUpper;
+    } else if (std::filesystem::exists(binPathLower)) {
+        rawProduced = binPathLower;
+    }
+
+    if (ok && !rawProduced.empty()) {
         result.success = true;
-        result.binaryPath = binaryPath.string();
-    } else if (ok && std::filesystem::exists(upperBin)) {
-        result.success = true;
-        result.binaryPath = upperBin.string();
+
+        if (options.format == TargetFormat::AcfhExe) {
+            std::filesystem::copy_file(rawProduced, exePath, std::filesystem::copy_options::overwrite_existing, ec);
+            result.binaryPath = exePath.string();
+        } else if (options.format == TargetFormat::AcfhLib) {
+            std::filesystem::copy_file(rawProduced, libPath, std::filesystem::copy_options::overwrite_existing, ec);
+            result.binaryPath = libPath.string();
+
+            // Also copy .lib to examples/ if compiled elsewhere (or if in a subdirectory)
+            // so any #import directives in example files can locate it easily
+            std::filesystem::path examplesDir = "examples";
+            if (std::filesystem::exists(examplesDir) && std::filesystem::is_directory(examplesDir)) {
+                std::filesystem::path exampleLib = examplesDir / libPath.filename();
+                if (exampleLib != libPath) {
+                    std::filesystem::copy_file(libPath, exampleLib, std::filesystem::copy_options::overwrite_existing, ec);
+                }
+            }
+        } else {
+            result.binaryPath = rawProduced.string();
+        }
     } else {
         result.success = false;
         result.errorMessage = "AstraC failed to generate binary output.";
@@ -237,13 +363,106 @@ CompilationResult AstraCToolchain::CompileFile(const std::string& inputFilePath,
     return result;
 }
 
-CompilationResult AstraCToolchain::CompileBuffer(const std::string& sourceCode, bool isAstraC, const std::string& customAstraCPath) {
+DisassemblyResult AstraCToolchain::DisassembleFile(const std::string& inputFilePath,
+                                                 const std::string& customAstraCPath,
+                                                 int bits,
+                                                 uint32_t org,
+                                                 bool verbose) {
+    DisassemblyResult result;
+    std::filesystem::path astracExe = FindAstraC(customAstraCPath);
+    if (astracExe.empty()) {
+        result.success = false;
+        result.errorMessage = "AstraC compiler binary not found. Please set AstraC path in Settings.";
+        return result;
+    }
+
+    std::filesystem::path inPath(inputFilePath);
+    if (!std::filesystem::exists(inPath)) {
+        result.success = false;
+        result.errorMessage = "Target file does not exist: " + inputFilePath;
+        return result;
+    }
+
+    inPath = std::filesystem::weakly_canonical(std::filesystem::absolute(inPath));
+    std::string workDir = inPath.parent_path().string();
+
+    std::filesystem::path dsmPath = inPath;
+    dsmPath.replace_extension(".DSM");
+
+    // Remove existing stale .DSM if present
+    std::error_code ec;
+    if (std::filesystem::exists(dsmPath)) {
+        std::filesystem::remove(dsmPath, ec);
+    }
+
+    // Build command line: AstraC.exe disasm <file> bits <16|32> [org <hex>] [verbose]
+    std::string cmd = "\"" + astracExe.string() + "\" disasm \"" + inPath.string() + "\"";
+    cmd += " bits " + std::to_string(bits == 16 ? 16 : 32);
+    if (org > 0) {
+        std::stringstream ss;
+        ss << " org 0x" << std::hex << org;
+        cmd += ss.str();
+    }
+    if (verbose) {
+        cmd += " verbose";
+    }
+
+    int exitCode = -1;
+    std::string output;
+#ifdef _WIN32
+    bool ok = RunProcessWithOutput(cmd, workDir, output, exitCode);
+#else
+    bool ok = false;
+#endif
+
+    result.outputLog = output;
+    result.exitCode = exitCode;
+
+    // Check if .DSM or .dsm was produced
+    std::filesystem::path dsmLower = inPath;
+    dsmLower.replace_extension(".dsm");
+
+    std::filesystem::path foundDsm;
+    if (std::filesystem::exists(dsmPath)) {
+        foundDsm = dsmPath;
+    } else if (std::filesystem::exists(dsmLower)) {
+        foundDsm = dsmLower;
+    }
+
+    if (ok && !foundDsm.empty()) {
+        result.success = true;
+        result.dsmPath = foundDsm.string();
+
+        std::ifstream dsmFile(foundDsm);
+        if (dsmFile.is_open()) {
+            std::string line;
+            while (std::getline(dsmFile, line)) {
+                result.lines.push_back(line);
+                result.dsmContent += line + "\n";
+            }
+        }
+    } else {
+        result.success = false;
+        result.errorMessage = "AstraC failed to disassemble file or generate .DSM output.";
+    }
+
+    return result;
+}
+
+CompilationResult AstraCToolchain::CompileBuffer(const std::string& sourceCode,
+                                                bool isAstraC,
+                                                const std::string& customAstraCPath,
+                                                const CompileOptions& options) {
     std::filesystem::path tempDir = std::filesystem::temp_directory_path();
     std::string srcLower = sourceCode;
     std::transform(srcLower.begin(), srcLower.end(), srcLower.begin(), [](unsigned char c) { return std::tolower(c); });
     bool is16Bit = (srcLower.find(".use16") != std::string::npos);
 
-    std::string baseName = is16Bit ? "16bit_em836_buffer" : "em836_buffer";
+    std::string prefix = "em836_buffer";
+    if (options.format == TargetFormat::AcfhLib) {
+        prefix = "em836_lib";
+    }
+    std::string baseName = is16Bit ? ("16bit_" + prefix) : prefix;
     std::filesystem::path tempSource = tempDir / (baseName + (isAstraC ? ".ac" : ".as"));
 
     std::ofstream file(tempSource);
@@ -257,7 +476,7 @@ CompilationResult AstraCToolchain::CompileBuffer(const std::string& sourceCode, 
     file << sourceCode;
     file.close();
 
-    return CompileFile(tempSource.string(), customAstraCPath);
+    return CompileFile(tempSource.string(), customAstraCPath, options);
 }
 
 bool AstraCToolchain::IngestFile(const std::string& filePath, Emulator& emu, const std::string& customAstraCPath) {
@@ -276,9 +495,28 @@ bool AstraCToolchain::IngestFile(const std::string& filePath, Emulator& emu, con
 
     emu.Pause();
 
+    // Source compilation (.as, .asm, .ac)
     if (ext == ".as" || ext == ".asm" || ext == ".ac") {
         emu.GetConsole().AppendBuildLog("[AstraC] Building: " + p.filename().string() + " ...\n");
-        CompilationResult res = CompileFile(filePath, customAstraCPath);
+
+        CompileOptions opts;
+        opts.format = TargetFormat::RawBin;
+        if (stemLower.rfind("_lib") != std::string::npos || stemLower.find("lib_") != std::string::npos) {
+            opts.format = TargetFormat::AcfhLib;
+        } else if (stemLower.rfind("_exe") != std::string::npos || stemLower.find("exe_") != std::string::npos) {
+            opts.format = TargetFormat::AcfhExe;
+        } else if (ext == ".ac") {
+            // Check if source contains #import
+            std::ifstream testF(p);
+            if (testF.is_open()) {
+                std::string s((std::istreambuf_iterator<char>(testF)), std::istreambuf_iterator<char>());
+                if (s.find("#import") != std::string::npos || s.find(".import") != std::string::npos) {
+                    opts.format = TargetFormat::AcfhExe;
+                }
+            }
+        }
+
+        CompilationResult res = CompileFile(filePath, customAstraCPath, opts);
         emu.GetConsole().AppendBuildLog(res.outputLog + "\n");
 
         if (!res.success) {
@@ -288,6 +526,11 @@ bool AstraCToolchain::IngestFile(const std::string& filePath, Emulator& emu, con
 
         emu.GetConsole().AppendBuildLog("[AstraC] Build succeeded. Output: " + res.binaryPath + "\n");
         return IngestFile(res.binaryPath, emu, customAstraCPath);
+    }
+
+    // Direct dynamic library ingestion (.lib)
+    if (ext == ".lib") {
+        return emu.LoadAcfhLibraryFile(filePath);
     }
 
     // Binary file ingestion (.bin, .exe)
@@ -311,36 +554,26 @@ bool AstraCToolchain::IngestFile(const std::string& filePath, Emulator& emu, con
             (targetBits == 16 ? "16-bit Real Mode (i286).\n" : "32-bit Protected Mode (i386).\n"));
     }
 
-    // Reset CPU registers and memory before loading new payload
-    emu.Reset();
+    AcfhParsedModule parsedMod;
+    if (ParseAcfhModule(buffer.data(), buffer.size(), parsedMod)) {
+        if (parsedMod.isLibrary) {
+            return emu.LoadAcfhLibrary(filePath, parsedMod);
+        } else {
+            return emu.LoadAcfhExecutable(filePath, parsedMod);
+        }
+    }
 
+    // Raw flat binary (.bin)
+    emu.Reset();
     uint32_t loadAddress = 0x00000000;
     uint32_t entryPoint = 0x00000000;
-
-    AcFileHeader header;
-    if (ParseAcfhHeader(buffer.data(), buffer.size(), header)) {
-        emu.GetConsole().AppendBuildLog("[Loader] Detected 112-byte ACFH Executable Header.\n");
-        loadAddress = 0x00000000;
-        entryPoint = loadAddress + header.entry_point_offset;
-
-        // Load contiguous payload starting at code_offset (.code + .data + .rodata)
-        if (header.code_offset < buffer.size()) {
-            size_t payloadSize = buffer.size() - header.code_offset;
-            emu.LoadBinary(buffer.data() + header.code_offset, payloadSize, loadAddress, entryPoint);
-        } else {
-            // Fallback: load full payload after 108-byte ACFH header
-            emu.LoadBinary(buffer.data() + sizeof(AcFileHeader), buffer.size() - sizeof(AcFileHeader), loadAddress, entryPoint);
-        }
-    } else {
-        // Raw flat binary (.bin)
-        emu.GetConsole().AppendBuildLog("[Loader] Loading raw binary at origin 0x00000000.\n");
-        emu.LoadBinary(buffer.data(), buffer.size(), loadAddress, entryPoint);
-    }
+    emu.GetConsole().AppendBuildLog("[Loader] Loading raw binary at origin 0x00000000.\n");
+    emu.LoadBinary(buffer.data(), buffer.size(), loadAddress, entryPoint);
 
     emu.GetConfig().lastLoadedFile = filePath;
     ConfigManager::Save(emu.GetConfig());
 
-    emu.GetConsole().WriteText("[System] Loaded '" + p.filename().string() + "'. EIP set to 0x" + std::to_string(entryPoint) + ".\n");
+    emu.GetConsole().WriteText("[System] Loaded '" + p.filename().string() + "'. EIP set to 0x00000000.\n");
     return true;
 }
 

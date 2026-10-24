@@ -48,10 +48,24 @@ struct GuiState {
     bool showLoadOptionsModal = false;
     bool showAboutModal = false;
 
+    // Layout management
+    bool requestLayoutReset = false;
+
     // Disassembly view state
     uint32_t disasmBaseAddress = 0x00000000;
     bool disasmFollowEip = true;
     char disasmAddressInput[16] = "00000000";
+    int disasmActiveTab = 0; ///< 0 = Live RAM (Capstone), 1 = AstraC Annotated (.DSM)
+
+    // AstraC Disassembler (.DSM) State
+    std::string dsmLoadedPath = "";
+    std::string dsmContent = "";
+    std::vector<std::string> dsmLines;
+    int dsmBits = 32;
+    uint32_t dsmOrg = 0;
+    char dsmSearchFilter[128] = "";
+    bool dsmSyncWithEip = true;
+    int dsmSelectedLine = -1;
 
     // Memory Hex Viewer state
     char memoryAddressInput[16] = "00000000";
@@ -66,8 +80,16 @@ struct GuiState {
     // Code Editor state
     std::string editorText;
     int editorLanguage = 0; ///< 0 = Assembly (.as), 1 = Astra C (.ac)
+    int editorTargetFormat = 0; ///< 0 = Raw .bin, 1 = ACFH .exe, 2 = ACFH .lib
+    bool acfhOptOffsetTable = true;
+    bool acfhOptFuncTable = true;
+    bool acfhOptImportTable = true;
     std::string editorFilePath = "";
     bool editorModified = false;
+
+    // ACFH Module & Library Inspector state
+    bool showAcfhInspector = true;
+    char loadLibPathInput[512] = "";
 
     // Load Options Modal state
     char loadAddressInput[16] = "00000000";
@@ -86,6 +108,11 @@ struct GuiState {
  */
 class GuiManager {
 public:
+    /**
+     * @brief Disassembles a file via AstraC and loads its .DSM content into GuiState.
+     */
+    static bool LoadDsmForFile(GuiState& state, const std::string& filePath, const std::string& customAstraCPath = "");
+
     /**
      * @brief Initializes default sample code and styles for the GUI.
      * @param state GuiState reference to initialize.
@@ -130,9 +157,13 @@ public:
     static void RenderExecutionWindow(Emulator& emu, GuiState& state);
     static void RenderDisassemblyWindow(Emulator& emu, GuiState& state);
     static void RenderMemoryWindow(Emulator& emu, GuiState& state);
+    static void RenderMemoryContent(Emulator& emu, GuiState& state);
     static void RenderVgaWindow(Emulator& emu, GuiState& state, SDL_Renderer* renderer);
     static void RenderConsoleWindow(Emulator& emu, GuiState& state);
     static void RenderEditorWindow(Emulator& emu, GuiState& state);
+    static void RenderAcfhInspectorWindow(Emulator& emu, GuiState& state);
+    static void RenderAcfhInspectorContent(Emulator& emu, GuiState& state);
+    static void RenderMemoryAndAcfhWindow(Emulator& emu, GuiState& state);
 
     // Modal Dialogs
     static void RenderSettingsModal(Emulator& emu, GuiState& state);

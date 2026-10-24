@@ -151,6 +151,9 @@ int main(int argc, char* argv[]) {
                 } else if (event.key.key == SDLK_R && (event.key.mod & SDL_KMOD_CTRL)) {
                     // Reset
                     emulator.Reset();
+                } else if (event.key.key == SDLK_L && (event.key.mod & SDL_KMOD_CTRL) && (event.key.mod & SDL_KMOD_SHIFT)) {
+                    // Reset Default GUI Layout
+                    guiState.requestLayoutReset = true;
                 }
             }
         }

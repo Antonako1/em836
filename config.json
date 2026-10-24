@@ -1,0 +1,11 @@
+{
+  "astracPath": "../AstraC/build/Release/AstraC.exe",
+  "memorySize": 16777216,
+  "clockSpeedHz": 0,
+  "defaultVideoMode": 0,
+  "cpuModeBits": 32,
+  "defaultEntryAddress": 0,
+  "defaultStackAddress": 8388608,
+  "lastLoadedFile": "examples/exe_import_demo.exe",
+  "lastWorkingDirectory": "."
+}

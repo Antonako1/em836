@@ -1,0 +1,90 @@
+// =============================================================================
+// em836 ACFH Executable Import Demo (examples/exe_import_demo.ac)
+// Demonstrates dynamic linking of ACFH .lib libraries in em836:
+//   - Uses #import to link functions from "math_lib.lib"
+//   - Dispatches calls across module boundaries into the 0x00100000 arena
+//   - Emits console messages via INT 0x88 SYS_PRINT_STR (0x11)
+// Compile with: AstraC.exe comp exe_import_demo.ac type exe ot,ft,it
+// =============================================================================
+
+#import lib_add, lib_mult, lib_factorial, lib_fibonacci from "math_lib.lib"
+
+VOID print_str(PU8 str) {
+    asm {
+        mov eax, 0x11
+        mov ebx, str
+        xor ecx, ecx
+        int 0x88
+    }
+    return;
+}
+
+VOID print_char(U8 c) {
+    asm {
+        mov eax, 0x10
+        mov bl, c
+        int 0x88
+    }
+    return;
+}
+
+VOID print_num(U32 val) {
+    if (val == 0) {
+        print_char(48);
+        return;
+    }
+    U8 buf[12];
+    U32 idx = 0;
+    while (val > 0) {
+        U32 rem = val % 10;
+        buf[idx] = (U8)(rem + 48);
+        val = val / 10;
+        idx = idx + 1;
+    }
+    while (idx > 0) {
+        idx = idx - 1;
+        print_char(buf[idx]);
+    }
+    return;
+}
+
+U32 main() {
+    print_str("========================================\n");
+    print_str("em836 ACFH Executable Dynamic Link Demo\n");
+    print_str("========================================\n\n");
+
+    print_str("[Main] Calling imported lib_add(15, 27)...\n");
+    U32 sum = lib_add(15, 27);
+    print_str("       Result: ");
+    print_num(sum);
+    print_str(" (expected 42)\n\n");
+
+    print_str("[Main] Calling imported lib_mult(7, 8)...\n");
+    U32 prod = lib_mult(7, 8);
+    print_str("       Result: ");
+    print_num(prod);
+    print_str(" (expected 56)\n\n");
+
+    print_str("[Main] Calling imported lib_factorial(6)...\n");
+    U32 fact = lib_factorial(6);
+    print_str("       Result: ");
+    print_num(fact);
+    print_str(" (expected 720)\n\n");
+
+    print_str("[Main] Calling imported lib_fibonacci(10)...\n");
+    U32 fib = lib_fibonacci(10);
+    print_str("       Result: ");
+    print_num(fib);
+    print_str(" (expected 55)\n\n");
+
+    print_str("All dynamic library calls executed successfully!\n");
+
+    // Exit cleanly via INT 0x88 SYS_EXIT
+    asm {
+        mov eax, 1
+        mov ebx, 0
+        int 0x88
+    }
+
+    return 0;
+}

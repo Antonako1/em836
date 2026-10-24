@@ -60,6 +60,16 @@ bool GuiManager::LoadFileIntoEditor(GuiState& state, const std::string& filePath
     std::transform(stemLower.begin(), stemLower.end(), stemLower.begin(), [](unsigned char c) { return std::tolower(c); });
     bool is16Bit = (stemLower.rfind("16bit", 0) == 0) || (content.find(".use16") != std::string::npos);
 
+    // Auto-detect target format
+    if (stemLower.rfind("_lib") != std::string::npos || stemLower.find("lib_") != std::string::npos) {
+        state.editorTargetFormat = 2; // ACFH .lib
+    } else if (stemLower.rfind("_exe") != std::string::npos || stemLower.find("exe_") != std::string::npos ||
+               content.find("#import") != std::string::npos || content.find(".import") != std::string::npos) {
+        state.editorTargetFormat = 1; // ACFH .exe
+    } else {
+        state.editorTargetFormat = 0; // Raw .bin
+    }
+
     if (emu) {
         uint32_t targetBits = is16Bit ? 16 : 32;
         if (emu->GetCpuMode() != targetBits) {
@@ -97,13 +107,19 @@ static void ExecuteCompileAndRun(Emulator& emu, GuiState& state, bool runAfterCo
         GuiManager::SaveEditorToFile(state, state.editorFilePath, &emu);
     }
 
+    CompileOptions opts;
+    opts.format = static_cast<TargetFormat>(state.editorTargetFormat);
+    opts.emitOffsetTable = state.acfhOptOffsetTable;
+    opts.emitFuncTable = state.acfhOptFuncTable;
+    opts.emitImportTable = state.acfhOptImportTable;
+
     emu.GetConsole().AppendBuildLog("[Build] Invoking " + toolName + "...\n");
 
     CompilationResult res;
     if (!state.editorFilePath.empty()) {
-        res = AstraCToolchain::CompileFile(state.editorFilePath, emu.GetConfig().astracPath);
+        res = AstraCToolchain::CompileFile(state.editorFilePath, emu.GetConfig().astracPath, opts);
     } else {
-        res = AstraCToolchain::CompileBuffer(state.editorText, isAstraC, emu.GetConfig().astracPath);
+        res = AstraCToolchain::CompileBuffer(state.editorText, isAstraC, emu.GetConfig().astracPath, opts);
     }
 
     emu.GetConsole().AppendBuildLog(res.outputLog + "\n");
@@ -120,7 +136,7 @@ static void ExecuteCompileAndRun(Emulator& emu, GuiState& state, bool runAfterCo
     snprintf(state.disasmAddressInput, sizeof(state.disasmAddressInput), "%08X", state.disasmBaseAddress);
     state.disasmFollowEip = true;
 
-    if (runAfterCompile) {
+    if (runAfterCompile && state.editorTargetFormat != 2) {
         emu.Start();
     }
 }
@@ -131,13 +147,34 @@ void GuiManager::RenderEditorWindow(Emulator& emu, GuiState& state) {
     if (ImGui::Begin("Code Editor", &state.showEditor)) {
         // Toolbar controls
         const char* langItems[] = { "Assembly (.as)", "Astra C (.ac)" };
-        ImGui::SetNextItemWidth(130);
+        ImGui::SetNextItemWidth(125);
         ImGui::Combo("##editor_lang", &state.editorLanguage, langItems, IM_ARRAYSIZE(langItems));
 
         ImGui::SameLine();
+        const char* targetItems[] = { "Raw (.bin)", "ACFH Executable (.exe)", "ACFH Library (.lib)" };
+        ImGui::SetNextItemWidth(170);
+        ImGui::Combo("##editor_target_format", &state.editorTargetFormat, targetItems, IM_ARRAYSIZE(targetItems));
+
+        if (state.editorTargetFormat != 0) {
+            ImGui::SameLine();
+            if (ImGui::Button(" Tables... ")) {
+                ImGui::OpenPopup("acfh_tables_popup");
+            }
+            if (ImGui::BeginPopup("acfh_tables_popup")) {
+                ImGui::TextDisabled("ACFH Header Tables");
+                ImGui::Separator();
+                ImGui::Checkbox("Relocation Table (ot)", &state.acfhOptOffsetTable);
+                ImGui::Checkbox("Function Export Table (ft)", &state.acfhOptFuncTable);
+                ImGui::Checkbox("Import Table (it)", &state.acfhOptImportTable);
+                ImGui::EndPopup();
+            }
+        }
+
+        ImGui::SameLine();
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.6f, 0.2f, 1.0f));
-        if (ImGui::Button(" Compile & Run ")) {
-            ExecuteCompileAndRun(emu, state, true);
+        const char* runBtnLabel = (state.editorTargetFormat == 2) ? " Compile & Load .lib " : " Compile & Run ";
+        if (ImGui::Button(runBtnLabel)) {
+            ExecuteCompileAndRun(emu, state, state.editorTargetFormat != 2);
         }
         ImGui::PopStyleColor();
 

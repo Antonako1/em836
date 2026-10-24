@@ -196,6 +196,14 @@ void Emulator::Reset() {
         }
     }
 
+    // Restore and relocate dynamic libraries in 0x00100000+ arena
+    RemapLoadedLibraries();
+
+    // Relink imports if ACFH main executable is present
+    if (m_mainModule.has_value()) {
+        RelinkImports();
+    }
+
     // Flush TB and TLB again after RAM update
     uc_ctl_flush_tb(m_uc);
     uc_ctl_flush_tlb(m_uc);
@@ -494,8 +502,8 @@ void Emulator::WorkerThreadLoop() {
             uc_reg_read(m_uc, UC_X86_REG_EIP, &currentEip);
         }
 
-        // Runaway boundary protection: if current EIP is at or beyond the loaded code image
-        if (m_codeSize > 0 && currentEip >= m_codeBaseAddress + m_codeSize) {
+        // Runaway boundary protection: if current EIP is outside valid code regions of main program and loaded libraries
+        if (m_codeSize > 0 && !IsAddressInExecutableCode(currentEip)) {
             m_workerActive = false;
             m_status = EmulatorStatus::Halted;
             m_cachedState.status = EmulatorStatus::Halted;
@@ -579,8 +587,8 @@ void Emulator::HookCodeCallback(uc_engine* uc, uint64_t address, uint32_t size, 
         return;
     }
 
-    // Runaway protection: if code executes past loaded binary into zeroed memory
-    if (self->m_codeSize > 0 && addr >= self->m_codeBaseAddress + self->m_codeSize) {
+    // Runaway protection: if code executes outside loaded binaries into uninitialized memory
+    if (self->m_codeSize > 0 && !self->IsAddressInExecutableCode(addr)) {
         uint8_t op[2] = {0, 0};
         if (self->ReadMemory(addr, op, 2) && op[0] == 0x00 && op[1] == 0x00) {
             uc_emu_stop(uc);
@@ -619,6 +627,336 @@ uint32_t Emulator::HookPortInCallback(uc_engine* uc, uint32_t port, int size, vo
 void Emulator::HookPortOutCallback(uc_engine* uc, uint32_t port, int size, uint32_t value, void* user_data) {
     Emulator* self = static_cast<Emulator*>(user_data);
     self->m_syscalls.HandlePortIO(*self, port, static_cast<uint32_t>(size), &value, true);
+}
+
+// -----------------------------------------------------------------------------
+// ACFH Dynamic Linking & Library Management
+// -----------------------------------------------------------------------------
+
+static bool MatchSymbolName(const std::string& a, const std::string& b) {
+    if (a == b) return true;
+    std::string s1 = (a.rfind('_', 0) == 0) ? a.substr(1) : a;
+    std::string s2 = (b.rfind('_', 0) == 0) ? b.substr(1) : b;
+    if (s1.size() != s2.size()) return false;
+    for (size_t i = 0; i < s1.size(); ++i) {
+        if (std::tolower(static_cast<unsigned char>(s1[i])) != std::tolower(static_cast<unsigned char>(s2[i]))) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool MatchLibName(const std::string& a, const std::string& b) {
+    if (a == b) return true;
+    std::filesystem::path p1(a);
+    std::filesystem::path p2(b);
+    std::string s1 = p1.stem().string();
+    std::string s2 = p2.stem().string();
+    if (s1.size() != s2.size()) return false;
+    for (size_t i = 0; i < s1.size(); ++i) {
+        if (std::tolower(static_cast<unsigned char>(s1[i])) != std::tolower(static_cast<unsigned char>(s2[i]))) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool Emulator::IsAddressInExecutableCode(uint32_t addr) const {
+    if (m_codeSize > 0 && addr >= m_codeBaseAddress && addr < m_codeBaseAddress + m_codeSize) {
+        return true;
+    }
+    for (const auto& lib : m_loadedLibraries) {
+        uint32_t codeStart = lib.baseAddress + lib.header.code_offset;
+        if (lib.header.code_size > 0 && addr >= codeStart && addr < codeStart + lib.header.code_size) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool Emulator::LoadAcfhExecutable(const std::string& filePath, const AcfhParsedModule& module) {
+    Pause();
+
+    m_mainModule = module;
+    m_mainModule->filePath = filePath;
+    m_mainModule->fileName = std::filesystem::path(filePath).filename().string();
+    m_mainModule->baseAddress = 0x00000000;
+
+    uint32_t payloadSize = static_cast<uint32_t>(module.rawBuffer.size());
+    uint32_t entryPoint = module.header.code_offset;
+    if (module.header.entry_point_offset != 0xFFFFFFFF) {
+        entryPoint = module.header.code_offset + module.header.entry_point_offset;
+    }
+
+    // Load full ACFH binary (header + code + data + rodata) into RAM starting at 0x00000000.
+    // This perfectly aligns .code at code_offset (0x70) and .rodata at rodata_offset (0x318),
+    // matching AstraC's `org = sizeof(AC_FILE_HEADER) = 0x70` addressing.
+    const uint8_t* payloadPtr = module.rawBuffer.data();
+    if (!LoadBinary(payloadPtr, payloadSize, 0x00000000, entryPoint)) {
+        return false;
+    }
+
+    // Auto-resolve imported libraries from disk if not already loaded in memory
+    std::filesystem::path exeDir = std::filesystem::path(filePath).parent_path();
+    for (const auto& imp : m_mainModule->imports) {
+        bool alreadyLoaded = false;
+        for (const auto& lib : m_loadedLibraries) {
+            if (MatchLibName(lib.fileName, imp.libName)) {
+                alreadyLoaded = true;
+                break;
+            }
+        }
+        if (alreadyLoaded) continue;
+
+        // Search candidate paths on disk
+        std::vector<std::filesystem::path> candidates = {
+            exeDir / imp.libName,
+            std::filesystem::path("examples") / imp.libName,
+            imp.libName
+        };
+
+        bool foundAndLoaded = false;
+        for (const auto& cand : candidates) {
+            if (std::filesystem::exists(cand)) {
+                if (LoadAcfhLibraryFile(cand.string())) {
+                    foundAndLoaded = true;
+                    break;
+                }
+            }
+        }
+
+        // If not found as .lib, check if source .ac exists and compile it into a .lib
+        if (!foundAndLoaded) {
+            std::filesystem::path libStem = std::filesystem::path(imp.libName).stem();
+            std::vector<std::filesystem::path> srcCandidates = {
+                exeDir / (libStem.string() + ".ac"),
+                std::filesystem::path("examples") / (libStem.string() + ".ac"),
+                exeDir / (libStem.string() + ".as"),
+                std::filesystem::path("examples") / (libStem.string() + ".as")
+            };
+            for (const auto& srcCand : srcCandidates) {
+                if (std::filesystem::exists(srcCand)) {
+                    CompileOptions opts;
+                    opts.format = TargetFormat::AcfhLib;
+                    CompilationResult cRes = AstraCToolchain::CompileFile(srcCand.string(), m_config.astracPath, opts);
+                    if (cRes.success) {
+                        LoadAcfhLibraryFile(cRes.binaryPath);
+                        foundAndLoaded = true;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    // Re-link imports after resolving libraries
+    RelinkImports();
+
+    m_config.lastLoadedFile = filePath;
+    ConfigManager::Save(m_config);
+
+    m_console.WriteText("[System] Loaded ACFH executable '" + m_mainModule->fileName +
+        "'. Entry point: 0x" + std::to_string(entryPoint) + ", Imports: " +
+        std::to_string(m_mainModule->imports.size()) + "\n");
+    return true;
+}
+
+bool Emulator::LoadAcfhLibrary(const std::string& filePath, const AcfhParsedModule& module) {
+    Pause();
+
+    AcfhParsedModule mod = module;
+    mod.filePath = filePath;
+    mod.fileName = std::filesystem::path(filePath).filename().string();
+    mod.isLibrary = true;
+
+    // Check if an existing library with same name is loaded; if so, replace it
+    for (auto it = m_loadedLibraries.begin(); it != m_loadedLibraries.end(); ++it) {
+        if (MatchLibName(it->fileName, mod.fileName)) {
+            m_loadedLibraries.erase(it);
+            break;
+        }
+    }
+
+    // Calculate base address in library arena (0x00100000+)
+    uint32_t nextBase = kLibraryArenaBase;
+    for (const auto& existing : m_loadedLibraries) {
+        uint32_t alignedSize = ((existing.totalMappedSize + 4095) / 4096) * 4096;
+        uint32_t endAddr = existing.baseAddress + alignedSize;
+        if (endAddr > nextBase) {
+            nextBase = endAddr;
+        }
+    }
+
+    mod.baseAddress = nextBase;
+    mod.totalMappedSize = static_cast<uint32_t>(mod.rawBuffer.size()) + mod.header.bss_size;
+
+    // Update runtime addresses of exported functions (codeOffset is relative to .code)
+    for (auto& exp : mod.exports) {
+        exp.runtimeAddress = mod.baseAddress + mod.header.code_offset + exp.codeOffset;
+    }
+
+    m_loadedLibraries.push_back(mod);
+
+    // Map into guest physical RAM and apply relocations
+    RemapLoadedLibraries();
+
+    // Relink imports
+    RelinkImports();
+
+    m_console.WriteText("[Library] Loaded '" + mod.fileName + "' at 0x" +
+        std::to_string(mod.baseAddress) + " (" + std::to_string(mod.exports.size()) + " exports).\n");
+    return true;
+}
+
+bool Emulator::LoadAcfhLibraryFile(const std::string& filePath) {
+    std::ifstream file(filePath, std::ios::binary);
+    if (!file.is_open()) {
+        m_console.WriteText("[Library Error] Failed to open: " + filePath + "\n");
+        return false;
+    }
+
+    std::vector<uint8_t> buffer((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+    if (buffer.empty()) {
+        m_console.WriteText("[Library Error] File is empty: " + filePath + "\n");
+        return false;
+    }
+
+    AcfhParsedModule parsedMod;
+    if (!AstraCToolchain::ParseAcfhModule(buffer.data(), buffer.size(), parsedMod)) {
+        m_console.WriteText("[Library Error] Invalid ACFH binary: " + filePath + "\n");
+        return false;
+    }
+
+    return LoadAcfhLibrary(filePath, parsedMod);
+}
+
+bool Emulator::UnloadAcfhLibrary(const std::string& libName) {
+    Pause();
+    for (auto it = m_loadedLibraries.begin(); it != m_loadedLibraries.end(); ++it) {
+        if (MatchLibName(it->fileName, libName)) {
+            // Zero out memory region
+            if (m_ram && it->baseAddress + it->totalMappedSize <= m_ramSize) {
+                std::memset(m_ram + it->baseAddress, 0, it->totalMappedSize);
+            }
+            m_loadedLibraries.erase(it);
+            RemapLoadedLibraries();
+            RelinkImports();
+            m_console.WriteText("[Library] Unloaded: " + libName + "\n");
+            return true;
+        }
+    }
+    return false;
+}
+
+void Emulator::ClearAcfhLibraries() {
+    Pause();
+    for (const auto& lib : m_loadedLibraries) {
+        if (m_ram && lib.baseAddress + lib.totalMappedSize <= m_ramSize) {
+            std::memset(m_ram + lib.baseAddress, 0, lib.totalMappedSize);
+        }
+    }
+    m_loadedLibraries.clear();
+    RelinkImports();
+}
+
+void Emulator::RemapLoadedLibraries() {
+    if (!m_ram) return;
+
+    for (auto& lib : m_loadedLibraries) {
+        if (lib.baseAddress + lib.totalMappedSize > m_ramSize) continue;
+
+        // Zero destination region (header + code + data + rodata + bss)
+        std::memset(m_ram + lib.baseAddress, 0, lib.totalMappedSize);
+
+        // Copy raw binary starting at offset 0 so code_offset and rodata_offset align with AstraC's org
+        size_t copyBytes = std::min<size_t>(lib.rawBuffer.size(), lib.totalMappedSize);
+        std::memcpy(m_ram + lib.baseAddress, lib.rawBuffer.data(), copyBytes);
+
+        // Apply base relocations
+        ApplyModuleRelocations(lib);
+    }
+
+    if (m_uc) {
+        uc_ctl_flush_tb(m_uc);
+        uc_ctl_flush_tlb(m_uc);
+    }
+}
+
+void Emulator::ApplyModuleRelocations(AcfhParsedModule& mod) {
+    if (mod.baseAddress == 0 || mod.relocations.empty() || !m_ram) return;
+
+    for (uint32_t relocOff : mod.relocations) {
+        if (relocOff < mod.header.code_size) {
+            // Instruction inside .code (relocOff is code-relative)
+            uint32_t targetInstr = mod.baseAddress + mod.header.code_offset + relocOff;
+            if (targetInstr + 15 <= m_ramSize && m_capstone) {
+                cs_insn* insn = nullptr;
+                size_t count = cs_disasm(m_capstone, m_ram + targetInstr, 15, targetInstr, 1, &insn);
+                if (count > 0 && insn) {
+                    if (insn[0].size >= 4) {
+                        uint32_t patchOffset = targetInstr + insn[0].size - 4;
+                        if (patchOffset + 4 <= m_ramSize) {
+                            uint32_t currentVal = 0;
+                            std::memcpy(&currentVal, m_ram + patchOffset, 4);
+                            currentVal += mod.baseAddress;
+                            std::memcpy(m_ram + patchOffset, &currentVal, 4);
+                        }
+                    }
+                    cs_free(insn, count);
+                }
+            }
+        } else {
+            // Data or rodata pointer (relocOff is code-relative offset into payload)
+            uint32_t patchOffset = mod.baseAddress + mod.header.code_offset + relocOff;
+            if (patchOffset + 4 <= m_ramSize) {
+                uint32_t currentVal = 0;
+                std::memcpy(&currentVal, m_ram + patchOffset, 4);
+                currentVal += mod.baseAddress;
+                std::memcpy(m_ram + patchOffset, &currentVal, 4);
+            }
+        }
+    }
+}
+
+bool Emulator::RelinkImports() {
+    if (!m_mainModule.has_value() || !m_ram) return false;
+
+    for (auto& imp : m_mainModule->imports) {
+        imp.resolved = false;
+        imp.resolvedAddress = 0;
+        imp.runtimePatchAddress = m_mainModule->baseAddress + m_mainModule->header.code_offset + imp.codePatchOffset;
+
+        for (const auto& lib : m_loadedLibraries) {
+            if (!MatchLibName(lib.fileName, imp.libName)) continue;
+
+            for (const auto& exp : lib.exports) {
+                if (MatchSymbolName(exp.name, imp.funcName)) {
+                    imp.resolved = true;
+                    imp.resolvedAddress = exp.runtimeAddress;
+
+                    uint32_t patchAddr = imp.runtimePatchAddress;
+                    if (patchAddr > 0 && patchAddr + 4 <= m_ramSize) {
+                        uint8_t op = m_ram[patchAddr - 1];
+                        if (op == 0xE8 || op == 0xE9) {
+                            int32_t rel32 = static_cast<int32_t>(imp.resolvedAddress) - static_cast<int32_t>(patchAddr + 4);
+                            std::memcpy(m_ram + patchAddr, &rel32, 4);
+                        } else {
+                            std::memcpy(m_ram + patchAddr, &imp.resolvedAddress, 4);
+                        }
+                    }
+                    break;
+                }
+            }
+            if (imp.resolved) break;
+        }
+    }
+
+    if (m_uc) {
+        uc_ctl_flush_tb(m_uc);
+        uc_ctl_flush_tlb(m_uc);
+    }
+
+    return true;
 }
 
 } // namespace em836

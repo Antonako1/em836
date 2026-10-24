@@ -26,12 +26,14 @@
 #include "vga.hpp"
 #include "console.hpp"
 #include "syscalls.hpp"
+#include "astrac.hpp"
 
 #include <unicorn/unicorn.h>
 #include <capstone/capstone.h>
 
 #include <string>
 #include <vector>
+#include <optional>
 #include <unordered_set>
 #include <thread>
 #include <atomic>
@@ -39,6 +41,9 @@
 #include <cstdint>
 
 namespace em836 {
+
+constexpr uint32_t kLibraryArenaBase  = 0x00100000; ///< 1 MB base address for dynamic library arena
+constexpr uint32_t kLibraryArenaLimit = 0x001FFFFF; ///< 2 MB limit for dynamic library arena
 
 /**
  * @enum EmulatorStatus
@@ -252,6 +257,56 @@ public:
     uint32_t GetCodeBaseAddress() const { return m_codeBaseAddress; }
     uint32_t GetCodeSize() const { return m_codeSize; }
 
+    // -------------------------------------------------------------
+    // ACFH Executable & Dynamic Library Support
+    // -------------------------------------------------------------
+    /**
+     * @brief Loads an ACFH executable into guest RAM at origin 0x00000000,
+     * and automatically resolves and links imported libraries.
+     */
+    bool LoadAcfhExecutable(const std::string& filePath, const AcfhParsedModule& module);
+
+    /**
+     * @brief Loads and relocates an ACFH dynamic library into the library memory arena (0x00100000+).
+     */
+    bool LoadAcfhLibrary(const std::string& filePath, const AcfhParsedModule& module);
+
+    /**
+     * @brief Reads an ACFH .lib file from disk, parses it, and loads it into the library arena.
+     */
+    bool LoadAcfhLibraryFile(const std::string& filePath);
+
+    /**
+     * @brief Unloads an active dynamic library by name and updates import resolution.
+     */
+    bool UnloadAcfhLibrary(const std::string& libName);
+
+    /**
+     * @brief Unloads all dynamic libraries currently in memory.
+     */
+    void ClearAcfhLibraries();
+
+    /**
+     * @brief Resolves and patches import table call/jump references across modules.
+     */
+    bool RelinkImports();
+
+    /**
+     * @brief Retrieves the active main ACFH executable metadata, if loaded.
+     */
+    const std::optional<AcfhParsedModule>& GetMainModule() const { return m_mainModule; }
+
+    /**
+     * @brief Retrieves list of currently loaded ACFH dynamic libraries.
+     */
+    const std::vector<AcfhParsedModule>& GetLoadedLibraries() const { return m_loadedLibraries; }
+
+    /**
+     * @brief Checks if a physical memory address falls within valid code regions of
+     * the main program or any loaded dynamic library.
+     */
+    bool IsAddressInExecutableCode(uint32_t addr) const;
+
 private:
     EmulatorConfig m_config;
     EmulatorStatus m_status = EmulatorStatus::Stopped;
@@ -262,6 +317,13 @@ private:
     uint32_t m_loadedEntryPoint = 0;
     uint32_t m_codeBaseAddress = 0;
     uint32_t m_codeSize = 0;
+
+    // ACFH Executable & Dynamic Library Storage
+    std::optional<AcfhParsedModule> m_mainModule;
+    std::vector<AcfhParsedModule> m_loadedLibraries;
+
+    void ApplyModuleRelocations(AcfhParsedModule& mod);
+    void RemapLoadedLibraries();
 
     // Unicorn Engine
     uc_engine* m_uc = nullptr;

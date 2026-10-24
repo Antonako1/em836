@@ -1,0 +1,251 @@
+; ACFH Binary (.code offset=0x70, size=682 bytes, entry=0x129)
+00000000  E9 24 01 00 00                                   jmp 0x00000129 <MAIN>            |.$...|
+
+00000005 <PRINT_STR>:
+00000005  55                                               push ebp                         |U|
+00000006  89 E5                                            mov ebp, esp                     |..|
+00000008  B8 11 00 00 00                                   mov eax, 0x00000011              |.....|
+0000000D  8B 5D 08                                         mov ebx, [ebp+0x08]              |.].|
+00000010  31 C9                                            xor ecx, ecx                     |1.|
+00000012  CD 88                                            int 0x88                         |..|
+00000014  5D                                               pop ebp                          |]|
+00000015  C3                                               ret                              |.|
+00000016  5D                                               pop ebp                          |]|
+00000017  C3                                               ret                              |.|
+
+00000018 <PRINT_CHAR>:
+00000018  55                                               push ebp                         |U|
+00000019  89 E5                                            mov ebp, esp                     |..|
+0000001B  B8 10 00 00 00                                   mov eax, 0x00000010              |.....|
+00000020  8A 5D 08                                         mov bl, [ebp+0x08]               |.].|
+00000023  CD 88                                            int 0x88                         |..|
+00000025  5D                                               pop ebp                          |]|
+00000026  C3                                               ret                              |.|
+00000027  5D                                               pop ebp                          |]|
+00000028  C3                                               ret                              |.|
+
+00000029 <PRINT_NUM>:
+00000029  55                                               push ebp                         |U|
+0000002A  89 E5                                            mov ebp, esp                     |..|
+0000002C  83 EC 14                                         sub esp, 0x14                    |...|
+0000002F  8B 45 08                                         mov eax, [ebp+0x08]              |.E.|
+00000032  50                                               push eax                         |P|
+00000033  B8 00 00 00 00                                   mov eax, 0x00000000              |.....|
+00000038  89 C3                                            mov ebx, eax                     |..|
+0000003A  58                                               pop eax                          |X|
+0000003B  39 D8                                            cmp eax, ebx                     |9.|
+0000003D  0F 94 C0                                         setz al                          |...|
+00000040  0F B6 C0                                         movzx al, al                     |...|
+00000043  85 C0                                            test eax, eax                    |..|
+00000045  74 18                                            jz 0x0000005F                    |t.|
+00000047  B8 30 00 00 00                                   mov eax, 0x00000030              |.0...|
+0000004C  50                                               push eax                         |P|
+0000004D  E8 C6 FF FF FF                                   call 0x00000018 <PRINT_CHAR>     |.....|
+00000052  83 C4 04                                         add esp, 0x04                    |...|
+00000055  83 C4 14                                         add esp, 0x14                    |...|
+00000058  5D                                               pop ebp                          |]|
+00000059  C3                                               ret                              |.|
+0000005A  E9 00 00 00 00                                   jmp 0x0000005F                   |.....|
+0000005F  B8 00 00 00 00                                   mov eax, 0x00000000              |.....|
+00000064  89 45 F0                                         mov [ebp-0x10], eax              |.E.|
+00000067  8B 45 08                                         mov eax, [ebp+0x08]              |.E.|
+0000006A  50                                               push eax                         |P|
+0000006B  B8 00 00 00 00                                   mov eax, 0x00000000              |.....|
+00000070  89 C3                                            mov ebx, eax                     |..|
+00000072  58                                               pop eax                          |X|
+00000073  39 D8                                            cmp eax, ebx                     |9.|
+00000075  0F 9F C0                                         setnle al                        |...|
+00000078  0F B6 C0                                         movzx al, al                     |...|
+0000007B  85 C0                                            test eax, eax                    |..|
+0000007D  74 5B                                            jz 0x000000DA                    |t[|
+0000007F  8B 45 08                                         mov eax, [ebp+0x08]              |.E.|
+00000082  50                                               push eax                         |P|
+00000083  B8 0A 00 00 00                                   mov eax, 0x0000000A              |.....|
+00000088  89 C3                                            mov ebx, eax                     |..|
+0000008A  58                                               pop eax                          |X|
+0000008B  31 D2                                            xor edx, edx                     |1.|
+0000008D  F7 F3                                            div ebx                          |..|
+0000008F  89 D0                                            mov eax, edx                     |..|
+00000091  89 45 EC                                         mov [ebp-0x14], eax              |.E.|
+00000094  8B 45 EC                                         mov eax, [ebp-0x14]              |.E.|
+00000097  50                                               push eax                         |P|
+00000098  B8 30 00 00 00                                   mov eax, 0x00000030              |.0...|
+0000009D  89 C3                                            mov ebx, eax                     |..|
+0000009F  58                                               pop eax                          |X|
+000000A0  01 D8                                            add eax, ebx                     |..|
+000000A2  50                                               push eax                         |P|
+000000A3  8D 45 F4                                         lea eax, [ebp-0x0C]              |.E.|
+000000A6  50                                               push eax                         |P|
+000000A7  8B 45 F0                                         mov eax, [ebp-0x10]              |.E.|
+000000AA  5B                                               pop ebx                          |[|
+000000AB  8D 04 03                                         lea eax, [ebx+eax*1]             |...|
+000000AE  5B                                               pop ebx                          |[|
+000000AF  88 18                                            mov [eax], bl                    |..|
+000000B1  8B 45 08                                         mov eax, [ebp+0x08]              |.E.|
+000000B4  50                                               push eax                         |P|
+000000B5  B8 0A 00 00 00                                   mov eax, 0x0000000A              |.....|
+000000BA  89 C3                                            mov ebx, eax                     |..|
+000000BC  58                                               pop eax                          |X|
+000000BD  31 D2                                            xor edx, edx                     |1.|
+000000BF  F7 F3                                            div ebx                          |..|
+000000C1  89 45 08                                         mov [ebp+0x08], eax              |.E.|
+000000C4  8B 45 F0                                         mov eax, [ebp-0x10]              |.E.|
+000000C7  50                                               push eax                         |P|
+000000C8  B8 01 00 00 00                                   mov eax, 0x00000001              |.....|
+000000CD  89 C3                                            mov ebx, eax                     |..|
+000000CF  58                                               pop eax                          |X|
+000000D0  01 D8                                            add eax, ebx                     |..|
+000000D2  89 45 F0                                         mov [ebp-0x10], eax              |.E.|
+000000D5  E9 8D FF FF FF                                   jmp 0x00000067                   |.....|
+000000DA  8B 45 F0                                         mov eax, [ebp-0x10]              |.E.|
+000000DD  50                                               push eax                         |P|
+000000DE  B8 00 00 00 00                                   mov eax, 0x00000000              |.....|
+000000E3  89 C3                                            mov ebx, eax                     |..|
+000000E5  58                                               pop eax                          |X|
+000000E6  39 D8                                            cmp eax, ebx                     |9.|
+000000E8  0F 9F C0                                         setnle al                        |...|
+000000EB  0F B6 C0                                         movzx al, al                     |...|
+000000EE  85 C0                                            test eax, eax                    |..|
+000000F0  74 2D                                            jz 0x0000011F                    |t-|
+000000F2  8B 45 F0                                         mov eax, [ebp-0x10]              |.E.|
+000000F5  50                                               push eax                         |P|
+000000F6  B8 01 00 00 00                                   mov eax, 0x00000001              |.....|
+000000FB  89 C3                                            mov ebx, eax                     |..|
+000000FD  58                                               pop eax                          |X|
+000000FE  29 D8                                            sub eax, ebx                     |).|
+00000100  89 45 F0                                         mov [ebp-0x10], eax              |.E.|
+00000103  8D 45 F4                                         lea eax, [ebp-0x0C]              |.E.|
+00000106  50                                               push eax                         |P|
+00000107  8B 45 F0                                         mov eax, [ebp-0x10]              |.E.|
+0000010A  5B                                               pop ebx                          |[|
+0000010B  8D 04 03                                         lea eax, [ebx+eax*1]             |...|
+0000010E  0F B6 00                                         movzx al, [eax]                  |...|
+00000111  50                                               push eax                         |P|
+00000112  E8 01 FF FF FF                                   call 0x00000018 <PRINT_CHAR>     |.....|
+00000117  83 C4 04                                         add esp, 0x04                    |...|
+0000011A  E9 BB FF FF FF                                   jmp 0x000000DA                   |.....|
+0000011F  83 C4 14                                         add esp, 0x14                    |...|
+00000122  5D                                               pop ebp                          |]|
+00000123  C3                                               ret                              |.|
+00000124  83 C4 14                                         add esp, 0x14                    |...|
+00000127  5D                                               pop ebp                          |]|
+00000128  C3                                               ret                              |.|
+
+00000129 <MAIN>:
+00000129  55                                               push ebp                         |U|
+0000012A  89 E5                                            mov ebp, esp                     |..|
+0000012C  83 EC 10                                         sub esp, 0x10                    |...|
+0000012F  B8 1A 03 00 00                                   mov eax, 0x0000031A              |.....|
+00000134  50                                               push eax                         |P|
+00000135  E8 CB FE FF FF                                   call 0x00000005 <PRINT_STR>      |.....|
+0000013A  83 C4 04                                         add esp, 0x04                    |...|
+0000013D  B8 44 03 00 00                                   mov eax, 0x00000344              |.D...|
+00000142  50                                               push eax                         |P|
+00000143  E8 BD FE FF FF                                   call 0x00000005 <PRINT_STR>      |.....|
+00000148  83 C4 04                                         add esp, 0x04                    |...|
+0000014B  B8 6D 03 00 00                                   mov eax, 0x0000036D              |.m...|
+00000150  50                                               push eax                         |P|
+00000151  E8 AF FE FF FF                                   call 0x00000005 <PRINT_STR>      |.....|
+00000156  83 C4 04                                         add esp, 0x04                    |...|
+00000159  B8 98 03 00 00                                   mov eax, 0x00000398              |.....|
+0000015E  50                                               push eax                         |P|
+0000015F  E8 A1 FE FF FF                                   call 0x00000005 <PRINT_STR>      |.....|
+00000164  83 C4 04                                         add esp, 0x04                    |...|
+00000167  B8 1B 00 00 00                                   mov eax, 0x0000001B              |.....|
+0000016C  50                                               push eax                         |P|
+0000016D  B8 0F 00 00 00                                   mov eax, 0x0000000F              |.....|
+00000172  50                                               push eax                         |P|
+00000173  E8 88 FE FF FF                                   call 0x00000000 <math_lib.lib::LIB_ADD> |.....|
+00000178  83 C4 08                                         add esp, 0x08                    |...|
+0000017B  89 45 FC                                         mov [ebp-0x04], eax              |.E.|
+0000017E  B8 C4 03 00 00                                   mov eax, 0x000003C4              |.....|
+00000183  50                                               push eax                         |P|
+00000184  E8 7C FE FF FF                                   call 0x00000005 <PRINT_STR>      |.|...|
+00000189  83 C4 04                                         add esp, 0x04                    |...|
+0000018C  8B 45 FC                                         mov eax, [ebp-0x04]              |.E.|
+0000018F  50                                               push eax                         |P|
+00000190  E8 94 FE FF FF                                   call 0x00000029 <PRINT_NUM>      |.....|
+00000195  83 C4 04                                         add esp, 0x04                    |...|
+00000198  B8 D4 03 00 00                                   mov eax, 0x000003D4              |.....|
+0000019D  50                                               push eax                         |P|
+0000019E  E8 62 FE FF FF                                   call 0x00000005 <PRINT_STR>      |.b...|
+000001A3  83 C4 04                                         add esp, 0x04                    |...|
+000001A6  B8 E5 03 00 00                                   mov eax, 0x000003E5              |.....|
+000001AB  50                                               push eax                         |P|
+000001AC  E8 54 FE FF FF                                   call 0x00000005 <PRINT_STR>      |.T...|
+000001B1  83 C4 04                                         add esp, 0x04                    |...|
+000001B4  B8 08 00 00 00                                   mov eax, 0x00000008              |.....|
+000001B9  50                                               push eax                         |P|
+000001BA  B8 07 00 00 00                                   mov eax, 0x00000007              |.....|
+000001BF  50                                               push eax                         |P|
+000001C0  E8 3B FE FF FF                                   call 0x00000000 <math_lib.lib::LIB_MULT> |.;...|
+000001C5  83 C4 08                                         add esp, 0x08                    |...|
+000001C8  89 45 F8                                         mov [ebp-0x08], eax              |.E.|
+000001CB  B8 10 04 00 00                                   mov eax, 0x00000410              |.....|
+000001D0  50                                               push eax                         |P|
+000001D1  E8 2F FE FF FF                                   call 0x00000005 <PRINT_STR>      |./...|
+000001D6  83 C4 04                                         add esp, 0x04                    |...|
+000001D9  8B 45 F8                                         mov eax, [ebp-0x08]              |.E.|
+000001DC  50                                               push eax                         |P|
+000001DD  E8 47 FE FF FF                                   call 0x00000029 <PRINT_NUM>      |.G...|
+000001E2  83 C4 04                                         add esp, 0x04                    |...|
+000001E5  B8 20 04 00 00                                   mov eax, 0x00000420              |. ...|
+000001EA  50                                               push eax                         |P|
+000001EB  E8 15 FE FF FF                                   call 0x00000005 <PRINT_STR>      |.....|
+000001F0  83 C4 04                                         add esp, 0x04                    |...|
+000001F3  B8 31 04 00 00                                   mov eax, 0x00000431              |.1...|
+000001F8  50                                               push eax                         |P|
+000001F9  E8 07 FE FF FF                                   call 0x00000005 <PRINT_STR>      |.....|
+000001FE  83 C4 04                                         add esp, 0x04                    |...|
+00000201  B8 06 00 00 00                                   mov eax, 0x00000006              |.....|
+00000206  50                                               push eax                         |P|
+00000207  E8 F4 FD FF FF                                   call 0x00000000 <math_lib.lib::LIB_FACTORIAL> |.....|
+0000020C  83 C4 04                                         add esp, 0x04                    |...|
+0000020F  89 45 F4                                         mov [ebp-0x0C], eax              |.E.|
+00000212  B8 5E 04 00 00                                   mov eax, 0x0000045E              |.^...|
+00000217  50                                               push eax                         |P|
+00000218  E8 E8 FD FF FF                                   call 0x00000005 <PRINT_STR>      |.....|
+0000021D  83 C4 04                                         add esp, 0x04                    |...|
+00000220  8B 45 F4                                         mov eax, [ebp-0x0C]              |.E.|
+00000223  50                                               push eax                         |P|
+00000224  E8 00 FE FF FF                                   call 0x00000029 <PRINT_NUM>      |.....|
+00000229  83 C4 04                                         add esp, 0x04                    |...|
+0000022C  B8 6E 04 00 00                                   mov eax, 0x0000046E              |.n...|
+00000231  50                                               push eax                         |P|
+00000232  E8 CE FD FF FF                                   call 0x00000005 <PRINT_STR>      |.....|
+00000237  83 C4 04                                         add esp, 0x04                    |...|
+0000023A  B8 80 04 00 00                                   mov eax, 0x00000480              |.....|
+0000023F  50                                               push eax                         |P|
+00000240  E8 C0 FD FF FF                                   call 0x00000005 <PRINT_STR>      |.....|
+00000245  83 C4 04                                         add esp, 0x04                    |...|
+00000248  B8 0A 00 00 00                                   mov eax, 0x0000000A              |.....|
+0000024D  50                                               push eax                         |P|
+0000024E  E8 AD FD FF FF                                   call 0x00000000 <math_lib.lib::LIB_FIBONACCI> |.....|
+00000253  83 C4 04                                         add esp, 0x04                    |...|
+00000256  89 45 F0                                         mov [ebp-0x10], eax              |.E.|
+00000259  B8 AE 04 00 00                                   mov eax, 0x000004AE              |.....|
+0000025E  50                                               push eax                         |P|
+0000025F  E8 A1 FD FF FF                                   call 0x00000005 <PRINT_STR>      |.....|
+00000264  83 C4 04                                         add esp, 0x04                    |...|
+00000267  8B 45 F0                                         mov eax, [ebp-0x10]              |.E.|
+0000026A  50                                               push eax                         |P|
+0000026B  E8 B9 FD FF FF                                   call 0x00000029 <PRINT_NUM>      |.....|
+00000270  83 C4 04                                         add esp, 0x04                    |...|
+00000273  B8 BE 04 00 00                                   mov eax, 0x000004BE              |.....|
+00000278  50                                               push eax                         |P|
+00000279  E8 87 FD FF FF                                   call 0x00000005 <PRINT_STR>      |.....|
+0000027E  83 C4 04                                         add esp, 0x04                    |...|
+00000281  B8 CF 04 00 00                                   mov eax, 0x000004CF              |.....|
+00000286  50                                               push eax                         |P|
+00000287  E8 79 FD FF FF                                   call 0x00000005 <PRINT_STR>      |.y...|
+0000028C  83 C4 04                                         add esp, 0x04                    |...|
+0000028F  B8 01 00 00 00                                   mov eax, 0x00000001              |.....|
+00000294  BB 00 00 00 00                                   mov ebx, 0x00000000              |.....|
+00000299  CD 88                                            int 0x88                         |..|
+0000029B  B8 00 00 00 00                                   mov eax, 0x00000000              |.....|
+000002A0  83 C4 10                                         add esp, 0x10                    |...|
+000002A3  5D                                               pop ebp                          |]|
+000002A4  C3                                               ret                              |.|
+000002A5  83 C4 10                                         add esp, 0x10                    |...|
+000002A8  5D                                               pop ebp                          |]|
+000002A9  C3                                               ret                              |.|

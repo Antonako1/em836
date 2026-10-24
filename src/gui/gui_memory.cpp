@@ -15,7 +15,13 @@ void GuiManager::RenderMemoryWindow(Emulator& emu, GuiState& state) {
     if (!state.showMemory) return;
 
     if (ImGui::Begin("Memory Hex Viewer", &state.showMemory)) {
-        CpuState cpu = emu.GetCpuStateSnapshot();
+        RenderMemoryContent(emu, state);
+    }
+    ImGui::End();
+}
+
+void GuiManager::RenderMemoryContent(Emulator& emu, GuiState& state) {
+    CpuState cpu = emu.GetCpuStateSnapshot();
 
         // -------------------------------------------------------------
         // Quick Jump Controls & Hex Address Input
@@ -131,8 +137,6 @@ void GuiManager::RenderMemoryWindow(Emulator& emu, GuiState& state) {
         }
 
         ImGui::EndChild();
-    }
-    ImGui::End();
 }
 
 } // namespace em836

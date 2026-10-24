@@ -134,6 +134,10 @@ bool ConsoleSubsystem::ExecuteCommand(const std::string& cmdLine, Emulator& emu)
                   "  reset            - Reset CPU registers, memory, and peripherals\n"
                   "  cls / clear      - Clear terminal screen\n"
                   "  load <file>      - Load and assemble/compile source or binary\n"
+                  "  loadlib <path>   - Load ACFH dynamic library (.lib) into memory\n"
+                  "  unloadlib <name> - Unload dynamic library by name\n"
+                  "  libs             - List loaded dynamic libraries and exported functions\n"
+                  "  acfh / objdump   - Print ACFH header, exports, and import patch table\n"
                   "  speed <hz>       - Set clock throttling (0 = Unlimited, e.g. 1000 for 1kHz)\n"
                   "  mode <text|gfx>  - Switch VGA display mode\n"
                   "  mem <addr> [len] - Display memory hex dump at hexadecimal address\n"
@@ -185,6 +189,93 @@ bool ConsoleSubsystem::ExecuteCommand(const std::string& cmdLine, Emulator& emu)
             } else {
                 WriteText("[CLI] Load failed. See AstraC Build Log for errors.\n");
             }
+        }
+        return true;
+    }
+
+    if (cmd == "loadlib") {
+        std::string libPath;
+        iss >> libPath;
+        if (libPath.empty()) {
+            WriteText("[CLI] Error: Usage is 'loadlib <path>'\n");
+        } else {
+            bool ok = emu.LoadAcfhLibraryFile(libPath);
+            if (ok) {
+                WriteText("[CLI] Library loaded successfully.\n");
+            } else {
+                WriteText("[CLI] Failed to load library.\n");
+            }
+        }
+        return true;
+    }
+
+    if (cmd == "unloadlib") {
+        std::string libName;
+        iss >> libName;
+        if (libName.empty()) {
+            WriteText("[CLI] Error: Usage is 'unloadlib <name>'\n");
+        } else {
+            bool ok = emu.UnloadAcfhLibrary(libName);
+            if (!ok) {
+                WriteText("[CLI] Library not found: " + libName + "\n");
+            }
+        }
+        return true;
+    }
+
+    if (cmd == "libs") {
+        const auto& libs = emu.GetLoadedLibraries();
+        if (libs.empty()) {
+            WriteText("[CLI] No dynamic libraries loaded.\n");
+        } else {
+            std::ostringstream oss;
+            oss << "=== Loaded ACFH Libraries (" << libs.size() << ") ===\n";
+            for (size_t i = 0; i < libs.size(); ++i) {
+                const auto& lib = libs[i];
+                oss << "[" << i << "] " << lib.fileName << " @ 0x" << std::hex << std::uppercase << lib.baseAddress
+                    << " (Code: " << std::dec << lib.header.code_size << " B, Mapped: " << lib.totalMappedSize
+                    << " B, " << lib.exports.size() << " exports, " << lib.relocations.size() << " relocs)\n";
+                for (const auto& exp : lib.exports) {
+                    oss << "      - " << exp.name << " @ 0x" << std::hex << std::uppercase << exp.runtimeAddress << " (+" << exp.codeOffset << ")\n";
+                }
+            }
+            WriteText(oss.str());
+        }
+        return true;
+    }
+
+    if (cmd == "acfh" || cmd == "objdump") {
+        const auto& mainMod = emu.GetMainModule();
+        if (!mainMod.has_value()) {
+            WriteText("[CLI] No ACFH executable is currently loaded.\n");
+        } else {
+            const auto& m = *mainMod;
+            std::ostringstream oss;
+            oss << "=== ACFH Header: " << m.fileName << " ===\n"
+                << "Version: 0x" << std::hex << m.header.version << "  Flags: 0x" << m.header.flags << "\n"
+                << "Entry Point: 0x" << m.header.entry_point_offset << "\n"
+                << "Sections:\n"
+                << "  .code   offset 0x" << m.header.code_offset << "  size " << std::dec << m.header.code_size << " B\n"
+                << "  .data   offset 0x" << std::hex << m.header.data_offset << "  size " << std::dec << m.header.data_size << " B\n"
+                << "  .rodata offset 0x" << std::hex << m.header.rodata_offset << "  size " << std::dec << m.header.rodata_size << " B\n"
+                << "  .bss    offset 0x" << std::hex << m.header.bss_offset << "  size " << std::dec << m.header.bss_size << " B\n"
+                << "  relocs  offset 0x" << std::hex << m.header.reloc_offset << "  count " << std::dec << m.relocations.size() << "\n"
+                << "  funcs   offset 0x" << std::hex << m.header.func_table_offset << "  count " << std::dec << m.exports.size() << "\n"
+                << "  imports offset 0x" << std::hex << m.header.import_table_offset << "  count " << std::dec << m.imports.size() << "\n";
+            if (!m.imports.empty()) {
+                oss << "Imports:\n";
+                for (size_t i = 0; i < m.imports.size(); ++i) {
+                    const auto& imp = m.imports[i];
+                    oss << "  [" << i << "] " << imp.libName << " -> " << imp.funcName
+                        << " @ patch 0x" << std::hex << imp.runtimePatchAddress << " (";
+                    if (imp.resolved) {
+                        oss << "Resolved: 0x" << imp.resolvedAddress << ")\n";
+                    } else {
+                        oss << "UNRESOLVED)\n";
+                    }
+                }
+            }
+            WriteText(oss.str());
         }
         return true;
     }

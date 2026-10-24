@@ -92,9 +92,9 @@ When a build runs, stdout/stderr and the process exit code are captured via anon
 
 ---
 
-## 5. ACFH 108-Byte Executable Header Specification
+## 5. ACFH 112-Byte Executable & Library Specification
 
-When AstraC is invoked with the `exe` or `lib` flag, it prepends the 108-byte **ACFH** (`AC_FILE_HEADER`) structure defined at [https://antonako.net/astrac/docs/fileheader.php](https://antonako.net/astrac/docs/fileheader.php):
+When AstraC is invoked with `type exe` or `type lib`, it prepends the 112-byte **ACFH** (`AC_FILE_HEADER`) structure defined in `AC_FH.h`:
 
 ```cpp
 #pragma pack(push, 1)
@@ -102,11 +102,11 @@ struct AcFileHeader {
     char magic[4];                  // "ACFH" magic signature
     uint32_t version;               // Format version (1.0 = 0x00010000)
     uint32_t flags;                 // Binary capability flags bitmask
-    uint32_t entry_point_offset;    // Binary-relative offset to entry point (_start / _main)
-    uint32_t code_offset;           // File offset to .code section
+    uint32_t entry_point_offset;    // Binary-relative offset to entry point (_start / _main), or 0xFFFFFFFF
+    uint32_t code_offset;           // File offset to .code section (typically 112)
     uint32_t data_offset;           // File offset to .data section
     uint32_t rodata_offset;         // File offset to .rodata section
-    uint32_t bss_offset;            // File offset to BSS section
+    uint32_t bss_offset;            // File offset to BSS section descriptor
     uint32_t reloc_offset;          // File offset to Relocation Table
     uint32_t func_table_offset;     // File offset to Function Export Table
     uint32_t import_table_offset;   // File offset to Import Table
@@ -117,13 +117,34 @@ struct AcFileHeader {
     uint32_t reloc_size;            // Size of Relocation Table in bytes
     uint32_t func_table_size;       // Size of Function Export Table section in bytes
     uint32_t import_table_size;     // Size of Import Table section in bytes
-    uint8_t reserved[40];           // Reserved bytes (padded to 108 bytes total)
+    uint8_t reserved[40];           // Reserved bytes (112 bytes total)
 };
 #pragma pack(pop)
 ```
 
-When [`AstraCToolchain::IngestFile`](../src/astrac.cpp) detects the `"ACFH"` magic bytes:
-1. It extracts `code_offset` and `entry_point_offset`.
-2. Loads the contiguous binary payload starting at `code_offset` into guest RAM at `0x00000000`.
-3. Sets initial `EIP = entry_point_offset`.
-4. If the binary does not start with `"ACFH"`, it is treated as a raw flat binary (`.BIN`) and loaded directly at `0x00000000` with `EIP = 0x00000000`.
+### ACFH Flags Bitmask
+- `AC_FLAG_EXECUTABLE` (`0x01`): Executable image with entry point (`.exe`).
+- `AC_FLAG_DYNAMIC` (`0x02`): Dynamic library module (`.lib`).
+- `AC_FLAG_HAS_RELOCS` (`0x04`): Image contains base relocation records.
+- `AC_FLAG_HAS_FUNCS` (`0x08`): Image contains exported function symbol table.
+- `AC_FLAG_HAS_IMPORTS` (`0x10`): Image contains import references to external `.lib` files.
+
+---
+
+## 6. Dynamic Linking & Library Memory Arena
+
+In **em836**, ACFH dynamic libraries are mapped into a dedicated **Library Memory Arena** above the VGA framebuffers and below the dynamic heap:
+
+- **Main Program Code**: `0x00000000`–`0x0009FFFF`
+- **VGA Text & Graphics Buffers**: `0x000A0000`–`0x000EC000`
+- **Dynamic Library Arena**: `0x00100000`–`0x001FFFFF` (1 MB allocated page-by-page)
+- **Guest Heap (`SYS_SBRK`)**: `0x00200000` upward
+
+### Dynamic Linker Ingestion Pipeline
+1. **Executable Loading**: When an `.exe` is loaded, its `.code`, `.data`, and `.rodata` sections are mapped at `0x00000000`.
+2. **Automatic Library Resolution**: The emulator inspects the `Import Table` of the executable. For each imported `.lib`, it checks memory first, then searches the executable directory and `examples/`. If a matching source file (`<stem>.ac`) is found on disk without a `.lib`, em836 automatically invokes AstraC with `type lib ot,ft,it` to compile it.
+3. **Base Relocation**: When libraries are loaded at `0x00100000+`, the relocation entries in `.code` (disassembled via Capstone) and `.data`/`.rodata` are adjusted by adding the module's runtime base address.
+4. **Import Table Patching**: For each `CALL rel32` (`0xE8`) instruction targeting an imported symbol, the relative displacement:
+   $$\text{rel32} = \text{targetAddress} - (\text{patchAddress} + 4)$$
+   is computed and written directly into guest RAM. Unicorn's translation block caches are subsequently flushed (`uc_ctl_flush_tb`, `uc_ctl_flush_tlb`).
+5. **Runaway Protection**: Execution outside the main executable code boundary is permitted inside any loaded library's `.code` range, preventing false runaway halts during inter-module calls.
